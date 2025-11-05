@@ -4,6 +4,9 @@ import dotenv from 'dotenv'
 import authRoutes from './routes/auth.js'
 import userRoutes from './routes/user.js'
 import loginForOtherRoutes from './routes/login-for-other.js'
+import periodsRoutes from './routes/periods.js'
+import symptomsRoutes from './routes/symptoms.js'
+import moodsRoutes from './routes/moods.js'
 
 // Load environment variables
 dotenv.config()
@@ -62,6 +65,9 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes)
 app.use('/api/user', userRoutes)
 app.use('/api/login-for-other', loginForOtherRoutes)
+app.use('/api/periods', periodsRoutes)
+app.use('/api/symptoms', symptomsRoutes)
+app.use('/api/moods', moodsRoutes)
 
 // 404 handler
 app.use((req, res) => {
