@@ -1,22 +1,28 @@
 import express from 'express'
 import { supabase, supabaseAdmin } from '../lib/supabase.js'
+import prisma from '../lib/prisma.js'
 import crypto from 'crypto'
 
 const router = express.Router()
 
-// In-memory OTP storage (in production, use Redis or database)
-// Format: { email: { otp: string, expiresAt: Date, verified: boolean } }
-const otpStore = new Map()
-
 // Clean up expired OTPs every 5 minutes
-setInterval(() => {
-  const now = new Date()
-  for (const [email, data] of otpStore.entries()) {
-    if (now > data.expiresAt) {
-      otpStore.delete(email)
+// Only run in non-serverless environments (local development)
+if (typeof process !== 'undefined' && process.env.VERCEL !== '1' && !process.env.VERCEL_ENV) {
+  setInterval(async () => {
+    try {
+      const now = new Date()
+      await prisma.otpCode.deleteMany({
+        where: {
+          expiresAt: {
+            lt: now,
+          },
+        },
+      })
+    } catch (error) {
+      console.error('[Login For Other] Error cleaning up expired OTPs:', error)
     }
-  }
-}, 5 * 60 * 1000)
+  }, 5 * 60 * 1000)
+}
 
 /**
  * Generate 6-digit OTP
@@ -131,23 +137,41 @@ router.post('/send-otp', async (req, res) => {
       })
     }
 
+    // Find or create user in database
+    let dbUser = await prisma.user.findUnique({
+      where: { supabaseId: user.id },
+    })
+
+    if (!dbUser) {
+      dbUser = await prisma.user.create({
+        data: {
+          email: user.email,
+          supabaseId: user.id,
+        },
+      })
+    }
+
     // Generate OTP
     const otp = generateOTP()
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000) // 10 minutes from now
 
     // Delete any existing unverified OTPs for this email
-    const existing = otpStore.get(email.toLowerCase())
-    if (existing && !existing.verified) {
-      otpStore.delete(email.toLowerCase())
-    }
+    await prisma.otpCode.deleteMany({
+      where: {
+        email: email.toLowerCase(),
+        verified: false,
+      },
+    })
 
-    // Store OTP
-    otpStore.set(email.toLowerCase(), {
-      otp,
-      expiresAt,
-      verified: false,
-      userId: user.id,
-      createdAt: new Date(),
+    // Store OTP in database
+    await prisma.otpCode.create({
+      data: {
+        email: email.toLowerCase(),
+        userId: dbUser.id,
+        otp,
+        expiresAt,
+        verified: false,
+      },
     })
 
     // Send OTP via email
@@ -181,8 +205,19 @@ router.post('/verify-otp', async (req, res) => {
       return res.status(400).json({ error: 'Email and OTP are required' })
     }
 
-    // Find the OTP record
-    const otpData = otpStore.get(email.toLowerCase())
+    // Find the OTP record in database
+    const otpData = await prisma.otpCode.findFirst({
+      where: {
+        email: email.toLowerCase(),
+        verified: false,
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+      include: {
+        user: true,
+      },
+    })
 
     if (!otpData) {
       return res.status(400).json({
@@ -192,7 +227,9 @@ router.post('/verify-otp', async (req, res) => {
 
     // Check if OTP has expired
     if (new Date() > otpData.expiresAt) {
-      otpStore.delete(email.toLowerCase())
+      await prisma.otpCode.delete({
+        where: { id: otpData.id },
+      })
       return res.status(400).json({
         error: 'OTP has expired. Please request a new one.',
       })
@@ -205,43 +242,43 @@ router.post('/verify-otp', async (req, res) => {
       })
     }
 
-    // Check if already verified
-    if (otpData.verified) {
-      return res.status(400).json({
-        error: 'This OTP has already been used. Please request a new one.',
-      })
+    // Get user information from Supabase Auth
+    const dbUser = otpData.user
+    if (!dbUser || !dbUser.supabaseId) {
+      return res.status(404).json({ error: 'User not found in database' })
     }
 
-    // Mark OTP as verified
-    otpData.verified = true
-
-    // Get user information
-    const { data: { user }, error: userError } = await supabaseAdmin.auth.admin.getUserById(otpData.userId)
+    const { data: { user }, error: userError } = await supabaseAdmin.auth.admin.getUserById(dbUser.supabaseId)
 
     if (userError || !user) {
       console.error('[Login For Other] Error getting user:', userError)
       return res.status(404).json({ error: 'User not found' })
     }
 
-    // Create a magic link token or password reset token to get a session
-    // Since we can't directly create a session for another user, we'll generate a one-time token
-    // The client will use this token to sign in as that user
-    // For security, we'll create a short-lived token that can be used once
-
-    // Generate a temporary token (in production, store this in database with expiration)
+    // Generate a temporary token
     const tempToken = crypto.randomBytes(32).toString('hex')
     const tokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000) // 15 minutes
 
-    // Store temporary token (in production, use Redis or database)
-    otpData.tempToken = tempToken
-    otpData.tempTokenExpiresAt = tokenExpiresAt
+    // Update OTP record with verification and temp token
+    await prisma.otpCode.update({
+      where: { id: otpData.id },
+      data: {
+        verified: true,
+        tempToken,
+        tempTokenExpiresAt: tokenExpiresAt,
+      },
+    })
 
     // Clean up old verified OTPs (older than 1 hour)
-    for (const [emailKey, data] of otpStore.entries()) {
-      if (data.verified && new Date() > new Date(data.createdAt.getTime() + 60 * 60 * 1000)) {
-        otpStore.delete(emailKey)
-      }
-    }
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000)
+    await prisma.otpCode.deleteMany({
+      where: {
+        verified: true,
+        createdAt: {
+          lt: oneHourAgo,
+        },
+      },
+    })
 
     // Generate a magic link that the client can use to authenticate
     // This allows the person logging in for someone else to get a session
@@ -311,34 +348,46 @@ router.post('/complete-login', async (req, res) => {
       return res.status(400).json({ error: 'Email and token are required' })
     }
 
-    // Verify temporary token
-    const otpData = otpStore.get(email.toLowerCase())
+    // Verify temporary token from database
+    const otpData = await prisma.otpCode.findFirst({
+      where: {
+        email: email.toLowerCase(),
+        tempToken,
+        verified: true,
+      },
+      include: {
+        user: true,
+      },
+    })
 
-    if (!otpData || !otpData.tempToken || otpData.tempToken !== tempToken) {
+    if (!otpData) {
       return res.status(400).json({ error: 'Invalid or expired token' })
     }
 
     // Check if token has expired
-    if (new Date() > otpData.tempTokenExpiresAt) {
-      otpStore.delete(email.toLowerCase())
+    if (!otpData.tempTokenExpiresAt || new Date() > otpData.tempTokenExpiresAt) {
+      await prisma.otpCode.delete({
+        where: { id: otpData.id },
+      })
       return res.status(400).json({ error: 'Token has expired. Please verify OTP again.' })
     }
 
-    // Get user and create a session
-    const { data: { user }, error: userError } = await supabaseAdmin.auth.admin.getUserById(otpData.userId)
+    // Get user from Supabase Auth
+    const dbUser = otpData.user
+    if (!dbUser || !dbUser.supabaseId) {
+      return res.status(404).json({ error: 'User not found in database' })
+    }
+
+    const { data: { user }, error: userError } = await supabaseAdmin.auth.admin.getUserById(dbUser.supabaseId)
 
     if (userError || !user) {
       return res.status(404).json({ error: 'User not found' })
     }
 
-    // Generate a new session token
-    // Note: Supabase admin API doesn't directly create sessions
-    // We'll need to use a password reset or magic link approach
-    // For now, we'll return user info and the client can handle the session creation
-
-    // Clean up the temporary token
-    delete otpData.tempToken
-    delete otpData.tempTokenExpiresAt
+    // Clean up the OTP record
+    await prisma.otpCode.delete({
+      where: { id: otpData.id },
+    })
 
     res.json({
       success: true,

@@ -46,22 +46,24 @@ app.use((err, req, res, next) => {
   })
 })
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`)
-  console.log(`📝 API endpoints:`)
-  console.log(`   POST   /api/auth/signup`)
-  console.log(`   POST   /api/auth/login`)
-  console.log(`   POST   /api/auth/refresh`)
-  console.log(`   POST   /api/auth/logout`)
-  console.log(`   GET    /api/auth/me`)
-  console.log(`   GET    /api/user`)
-  console.log(`   PATCH  /api/user`)
-  console.log(`   POST   /api/login-for-other/check-email`)
-  console.log(`   POST   /api/login-for-other/send-otp`)
-  console.log(`   POST   /api/login-for-other/verify-otp`)
-  console.log(`   POST   /api/login-for-other/complete-login`)
-  console.log(`   GET    /health`)
-})
+// Only start server if not in Vercel/serverless environment
+if (process.env.VERCEL !== '1' && !process.env.VERCEL_ENV) {
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on http://localhost:${PORT}`)
+    console.log(`📝 API endpoints:`)
+    console.log(`   POST   /api/auth/signup`)
+    console.log(`   POST   /api/auth/login`)
+    console.log(`   POST   /api/auth/refresh`)
+    console.log(`   POST   /api/auth/logout`)
+    console.log(`   GET    /api/auth/me`)
+    console.log(`   GET    /api/user`)
+    console.log(`   PATCH  /api/user`)
+    console.log(`   POST   /api/login-for-other/check-email`)
+    console.log(`   POST   /api/login-for-other/send-otp`)
+    console.log(`   POST   /api/login-for-other/verify-otp`)
+    console.log(`   POST   /api/login-for-other/complete-login`)
+    console.log(`   GET    /health`)
+  })
+}
 
 export default app

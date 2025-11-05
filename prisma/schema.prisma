@@ -1,0 +1,135 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL") // Direct connection for migrations
+}
+
+// User model - stores user profile information
+model User {
+  id            String         @id @default(uuid())
+  email         String         @unique
+  supabaseId    String?        @unique @map("supabase_id") // Supabase Auth user ID
+  name          String?
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+  
+  periods       Period[]
+  symptoms      Symptom[]
+  moods         Mood[]
+  notes         Note[]
+  settings      UserSettings?
+  otpCodes      OtpCode[]
+  
+  @@map("users")
+}
+
+// User Settings
+model UserSettings {
+  id                    String    @id @default(uuid())
+  userId                String    @unique @map("user_id")
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  averageCycleLength    Int       @default(28) @map("average_cycle_length")
+  averagePeriodLength   Int       @default(5) @map("average_period_length")
+  reminderEnabled       Boolean   @default(true) @map("reminder_enabled")
+  reminderDaysBefore    Int       @default(3) @map("reminder_days_before")
+  
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+  
+  @@map("user_settings")
+}
+
+// Period tracking
+model Period {
+  id          String    @id @default(uuid())
+  userId      String    @map("user_id")
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  startDate   DateTime  @map("start_date")
+  endDate     DateTime? @map("end_date")
+  flowLevel   String?   @map("flow_level") // light, medium, heavy
+  
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  
+  @@index([userId])
+  @@map("periods")
+}
+
+// Symptoms tracking
+model Symptom {
+  id          String    @id @default(uuid())
+  userId      String    @map("user_id")
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  date        DateTime
+  type        String    // cramps, headache, bloating, fatigue, etc.
+  severity    Int       // 1-5 scale
+  
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  
+  @@index([userId, date])
+  @@map("symptoms")
+}
+
+// Mood tracking
+model Mood {
+  id          String    @id @default(uuid())
+  userId      String    @map("user_id")
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  date        DateTime
+  type        String    // happy, sad, anxious, angry, calm, etc.
+  
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  
+  @@index([userId, date])
+  @@map("moods")
+}
+
+// Notes
+model Note {
+  id          String    @id @default(uuid())
+  userId      String    @map("user_id")
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  date        DateTime
+  content     String
+  
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  
+  @@index([userId, date])
+  @@map("notes")
+}
+
+// OTP codes for "login for someone else" flow
+model OtpCode {
+  id            String    @id @default(uuid())
+  email         String
+  userId        String?   @map("user_id")
+  user          User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  otp           String
+  verified      Boolean   @default(false)
+  tempToken     String?   @map("temp_token")
+  
+  expiresAt     DateTime  @map("expires_at")
+  tempTokenExpiresAt DateTime? @map("temp_token_expires_at")
+  
+  createdAt     DateTime  @default(now()) @map("created_at")
+  
+  @@index([email])
+  @@index([userId])
+  @@map("otp_codes")
+}
