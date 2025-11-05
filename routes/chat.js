@@ -300,14 +300,34 @@ CRITICAL RULES:
         userCycleContext += `- Name: ${userName}\n`
         userCycleContext += `- Email: ${dbUserWithData.email || 'not provided'}\n`
         
+        // Get user's average period length from settings (default 5 days) - use this for all calculations
+        const userPeriodLength = dbUserWithData.settings?.periodDuration || 
+                                 dbUserWithData.settings?.averagePeriodLength || 
+                                 5
+        
         // Period Data
         if (hasPeriodData && dbUserWithData.periods) {
+          // Use the user's period length setting
+          const avgPeriodLength = userPeriodLength
+          
           userCycleContext += `\nPERIOD HISTORY (${dbUserWithData.periods.length} periods tracked):\n`
           const recentPeriods = dbUserWithData.periods.slice(0, 10)
           recentPeriods.forEach((p, idx) => {
-            const start = new Date(p.startDate).toLocaleDateString()
-            const end = p.endDate ? new Date(p.endDate).toLocaleDateString() : 'ongoing'
-            userCycleContext += `  ${idx + 1}. ${start} to ${end}${p.flowLevel ? ` - ${p.flowLevel} flow` : ''}\n`
+            const start = new Date(p.startDate)
+            const startDateStr = start.toLocaleDateString()
+            
+            // Calculate end date if not set
+            let endDateStr = 'ongoing'
+            if (p.endDate) {
+              endDateStr = new Date(p.endDate).toLocaleDateString()
+            } else {
+              // Calculate end date based on average period length
+              const calculatedEnd = new Date(start)
+              calculatedEnd.setDate(calculatedEnd.getDate() + avgPeriodLength - 1)
+              endDateStr = calculatedEnd.toLocaleDateString()
+            }
+            
+            userCycleContext += `  ${idx + 1}. ${startDateStr} to ${endDateStr}${p.flowLevel ? ` - ${p.flowLevel} flow` : ''}\n`
           })
           if (dbUserWithData.periods.length > 10) {
             userCycleContext += `  ... and ${dbUserWithData.periods.length - 10} more periods\n`
@@ -333,10 +353,16 @@ CRITICAL RULES:
             }
             
             const avgCycle = cycles.length > 0 ? Math.round(cycles.reduce((a, b) => a + b, 0) / cycles.length) : null
-            const avgPeriodLength = periodLengths.length > 0 ? Math.round(periodLengths.reduce((a, b) => a + b, 0) / periodLengths.length) : null
+            const calculatedAvgPeriodLength = periodLengths.length > 0 ? Math.round(periodLengths.reduce((a, b) => a + b, 0) / periodLengths.length) : null
+            
+            // Use settings period duration, or calculated, or default to 5
+            const finalAvgPeriodLength = dbUserWithData.settings?.periodDuration || 
+                                         dbUserWithData.settings?.averagePeriodLength || 
+                                         calculatedAvgPeriodLength || 
+                                         5
             
             if (avgCycle) userCycleContext += `- Average Cycle Length: ${avgCycle} days\n`
-            if (avgPeriodLength) userCycleContext += `- Average Period Duration: ${avgPeriodLength} days\n`
+            userCycleContext += `- Average Period Duration: ${finalAvgPeriodLength} days (from user settings${calculatedAvgPeriodLength ? ' and history' : ''})\n`
             
             // Next period prediction
             if (avgCycle) {
@@ -345,6 +371,62 @@ CRITICAL RULES:
               nextPredicted.setDate(nextPredicted.getDate() + avgCycle)
               userCycleContext += `- Next Period Predicted: Around ${nextPredicted.toLocaleDateString()}\n`
             }
+          }
+          
+          // Current period status with correct end date calculation
+          // Use the user's period length setting
+          const periodLengthForCalc = userPeriodLength
+          
+          const today = new Date()
+          const todayYear = today.getFullYear()
+          const todayMonth = today.getMonth()
+          const todayDay = today.getDate()
+          const todayLocal = new Date(todayYear, todayMonth, todayDay)
+          todayLocal.setHours(0, 0, 0, 0)
+          
+          const activePeriod = dbUserWithData.periods.find(p => {
+            const start = new Date(p.startDate)
+            const startLocal = new Date(start.getFullYear(), start.getMonth(), start.getDate())
+            startLocal.setHours(0, 0, 0, 0)
+            
+            // Calculate end date if not set, using user's average period length
+            let endLocal = null
+            if (p.endDate) {
+              const end = new Date(p.endDate)
+              endLocal = new Date(end.getFullYear(), end.getMonth(), end.getDate())
+              endLocal.setHours(0, 0, 0, 0)
+            } else {
+              endLocal = new Date(startLocal)
+              endLocal.setDate(endLocal.getDate() + periodLengthForCalc - 1)
+            }
+            
+            return startLocal <= todayLocal && endLocal >= todayLocal
+          })
+          
+          if (activePeriod) {
+            const periodStart = new Date(activePeriod.startDate)
+            const periodStartLocal = new Date(periodStart.getFullYear(), periodStart.getMonth(), periodStart.getDate())
+            periodStartLocal.setHours(0, 0, 0, 0)
+            
+            let periodEndLocal = null
+            if (activePeriod.endDate) {
+              const periodEnd = new Date(activePeriod.endDate)
+              periodEndLocal = new Date(periodEnd.getFullYear(), periodEnd.getMonth(), periodEnd.getDate())
+              periodEndLocal.setHours(0, 0, 0, 0)
+            } else {
+              periodEndLocal = new Date(periodStartLocal)
+              periodEndLocal.setDate(periodEndLocal.getDate() + periodLengthForCalc - 1)
+            }
+            
+            const diff = Math.floor((todayLocal.getTime() - periodStartLocal.getTime()) / (1000 * 60 * 60 * 24))
+            const daysInPeriod = diff + 1
+            const totalPeriodDays = Math.floor((periodEndLocal.getTime() - periodStartLocal.getTime()) / (1000 * 60 * 60 * 24)) + 1
+            
+            userCycleContext += `\n- Current Period Status:\n`
+            userCycleContext += `  • Started: ${periodStartLocal.toLocaleDateString()}\n`
+            userCycleContext += `  • Ends: ${periodEndLocal.toLocaleDateString()} (calculated using ${periodLengthForCalc} day average)\n`
+            userCycleContext += `  • Today is Day ${daysInPeriod} of ${totalPeriodDays}\n`
+            userCycleContext += `  • IMPORTANT: When telling the user about their period, always mention the calculated end date (${periodEndLocal.toLocaleDateString()}), not "ongoing". For example: "Your period started on ${periodStartLocal.toLocaleDateString()} and ended on ${periodEndLocal.toLocaleDateString()} (${periodLengthForCalc} days total)." If the period is in the past, say "ended" not "will end".\n`
           }
         }
         

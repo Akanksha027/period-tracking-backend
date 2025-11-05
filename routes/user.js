@@ -319,7 +319,10 @@ router.get('/settings', async (req, res) => {
  */
 router.patch('/settings', async (req, res) => {
   try {
-    const { birthYear, lastPeriodDate, periodDuration, averageCycleLength } = req.body
+    const { birthYear, lastPeriodDate, periodDuration, averagePeriodLength, averageCycleLength } = req.body
+    
+    // Support both periodDuration and averagePeriodLength (they're the same)
+    const finalPeriodDuration = periodDuration !== undefined ? periodDuration : averagePeriodLength
 
     console.log('[User Settings] Update request:', {
       email: req.user.email,
@@ -327,6 +330,7 @@ router.patch('/settings', async (req, res) => {
       birthYear,
       lastPeriodDate,
       periodDuration,
+      averagePeriodLength,
       averageCycleLength,
     })
 
@@ -381,9 +385,9 @@ router.patch('/settings', async (req, res) => {
     if (lastPeriodDate !== undefined) {
       updateData.lastPeriodDate = lastPeriodDate ? new Date(lastPeriodDate) : null
     }
-    if (periodDuration !== undefined && periodDuration !== null) {
-      updateData.periodDuration = periodDuration || 5 // Default 5 days
-      updateData.averagePeriodLength = periodDuration || 5 // Also update alias
+    if (finalPeriodDuration !== undefined && finalPeriodDuration !== null) {
+      updateData.periodDuration = finalPeriodDuration || 5 // Default 5 days
+      updateData.averagePeriodLength = finalPeriodDuration || 5 // Also update alias
     }
     if (averageCycleLength !== undefined && averageCycleLength !== null) {
       updateData.averageCycleLength = averageCycleLength || 28 // Default 28 days
