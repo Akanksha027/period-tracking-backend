@@ -139,7 +139,7 @@ async function findUserByEmail(email) {
         let allUsers = await clerk.users.getUserList({ limit: 500 })
         console.log('[Login For Other] Total users retrieved for manual search:', allUsers?.data?.length || 0)
         
-        if (allUsers?.data && allUsers.data.length > 0) {
+                if (allUsers?.data && allUsers.data.length > 0) {
           // Search through all emails (primary and secondary)
           const matchedUser = allUsers.data.find(user => {
             if (!user.emailAddresses || user.emailAddresses.length === 0) return false
@@ -149,40 +149,43 @@ async function findUserByEmail(email) {
               return emailAddr === normalizedEmail
             })
           })
-        
-        if (matchedUser) {
-          const userEmail = matchedUser.emailAddresses?.[0]?.emailAddress || normalizedEmail
-          console.log('[Login For Other] User found via manual search:', {
-            id: matchedUser.id,
-            email: userEmail,
-          })
 
-          // Sync to database if not exists
-          if (!dbUser) {
-            try {
-              await prisma.user.create({
-                data: {
-                  email: normalizedEmail,
-                  clerkId: matchedUser.id,
-                  name: matchedUser.firstName || matchedUser.lastName
-                    ? `${matchedUser.firstName || ''} ${matchedUser.lastName || ''}`.trim()
-                    : null,
-                },
-              })
-            } catch (syncError) {
-              console.error('[Login For Other] Error syncing user to database:', syncError)
+          if (matchedUser) {
+            const userEmail = matchedUser.emailAddresses?.[0]?.emailAddress || normalizedEmail
+            console.log('[Login For Other] User found via manual search:', {
+              id: matchedUser.id,
+              email: userEmail,
+            })
+
+            // Sync to database if not exists
+            if (!dbUser) {
+              try {
+                await prisma.user.create({
+                  data: {
+                    email: normalizedEmail,
+                    clerkId: matchedUser.id,
+                    name: matchedUser.firstName || matchedUser.lastName
+                      ? `${matchedUser.firstName || ''} ${matchedUser.lastName || ''}`.trim()
+                      : null,
+                  },
+                })
+              } catch (syncError) {
+                console.error('[Login For Other] Error syncing user to database:', syncError)
+              }
             }
-          }
 
-          return {
-            id: matchedUser.id,
-            email: userEmail,
-            clerkId: matchedUser.id,
-            firstName: matchedUser.firstName,
-            lastName: matchedUser.lastName,
+            return {
+              id: matchedUser.id,
+              email: userEmail,
+              clerkId: matchedUser.id,
+              firstName: matchedUser.firstName,
+              lastName: matchedUser.lastName,
+            }
+          } else {
+            console.log('[Login For Other] No matching user found in Clerk database')
           }
         } else {
-          console.log('[Login For Other] No users found in Clerk database')
+          console.log('[Login For Other] No users retrieved from Clerk database')
         }
       } catch (manualSearchError) {
         console.error('[Login For Other] Error in manual search:', manualSearchError)
