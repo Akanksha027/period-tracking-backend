@@ -276,6 +276,53 @@ async function findUserByEmail(email) {
 }
 
 /**
+ * GET /api/login-for-other/get-otp/:email
+ * Get the latest OTP for an email (for testing - remove in production)
+ */
+router.get('/get-otp/:email', async (req, res) => {
+  try {
+    const { email } = req.params
+    const normalizedEmail = email.toLowerCase().trim()
+
+    // Get the latest unverified OTP for this email
+    const otpRecord = await prisma.otpCode.findFirst({
+      where: {
+        email: normalizedEmail,
+        verified: false,
+        expiresAt: {
+          gt: new Date(), // Not expired
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    })
+
+    if (!otpRecord) {
+      return res.status(404).json({
+        success: false,
+        message: 'No active OTP found for this email',
+      })
+    }
+
+    res.json({
+      success: true,
+      email: normalizedEmail,
+      otp: otpRecord.otp,
+      expiresAt: otpRecord.expiresAt,
+      createdAt: otpRecord.createdAt,
+      warning: '⚠️ This endpoint is for testing only. Remove in production!',
+    })
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      details: error.message,
+    })
+  }
+})
+
+/**
  * GET /api/login-for-other/test-clerk/:userId
  * Test endpoint to search for a specific user by Clerk User ID
  */
