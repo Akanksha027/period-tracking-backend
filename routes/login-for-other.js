@@ -71,18 +71,32 @@ async function findUserByEmail(email) {
       where: { email: normalizedEmail },
     })
 
-    // Search for user in Clerk by email
+        // Search for user in Clerk by email
     try {
       // Clerk API: Get user list and filter by email
       // Note: Clerk doesn't have a direct "getUserByEmail" API, so we use getUserList with email filter
+      console.log('[Login For Other] Searching Clerk for email:', normalizedEmail)
+      
       const users = await clerk.users.getUserList({
         emailAddress: [normalizedEmail],
         limit: 1,
       })
 
+      console.log('[Login For Other] Clerk API response:', JSON.stringify({
+        hasData: !!users?.data,
+        dataLength: users?.data?.length || 0,
+        totalCount: users?.totalCount || 0,
+      }))
+
       if (users && users.data && users.data.length > 0) {
         const clerkUser = users.data[0]
-        console.log('[Login For Other] User found in Clerk:', clerkUser.id, clerkUser.emailAddresses[0]?.emailAddress)
+        const userEmail = clerkUser.emailAddresses?.[0]?.emailAddress || normalizedEmail
+        console.log('[Login For Other] User found in Clerk:', {
+          id: clerkUser.id,
+          email: userEmail,
+          firstName: clerkUser.firstName,
+          lastName: clerkUser.lastName,
+        })
 
         // Sync user to database if not exists
         if (!dbUser) {
@@ -91,8 +105,8 @@ async function findUserByEmail(email) {
               data: {
                 email: normalizedEmail,
                 clerkId: clerkUser.id,
-                name: clerkUser.firstName || clerkUser.lastName 
-                  ? `${clerkUser.firstName || ''} ${clerkUser.lastName || ''}`.trim() 
+                name: clerkUser.firstName || clerkUser.lastName
+                  ? `${clerkUser.firstName || ''} ${clerkUser.lastName || ''}`.trim()
                   : null,
               },
             })
@@ -105,10 +119,54 @@ async function findUserByEmail(email) {
 
         return {
           id: clerkUser.id,
-          email: clerkUser.emailAddresses[0]?.emailAddress || normalizedEmail,
+          email: userEmail,
           clerkId: clerkUser.id,
           firstName: clerkUser.firstName,
           lastName: clerkUser.lastName,
+        }
+      }
+
+      // Try alternative: search without email filter and manually filter
+      console.log('[Login For Other] Email filter didn\'t work, trying manual search')
+      const allUsers = await clerk.users.getUserList({ limit: 100 })
+      if (allUsers?.data) {
+        const matchedUser = allUsers.data.find(user => 
+          user.emailAddresses?.some(email => 
+            email.emailAddress?.toLowerCase() === normalizedEmail
+          )
+        )
+        
+        if (matchedUser) {
+          const userEmail = matchedUser.emailAddresses?.[0]?.emailAddress || normalizedEmail
+          console.log('[Login For Other] User found via manual search:', {
+            id: matchedUser.id,
+            email: userEmail,
+          })
+
+          // Sync to database if not exists
+          if (!dbUser) {
+            try {
+              await prisma.user.create({
+                data: {
+                  email: normalizedEmail,
+                  clerkId: matchedUser.id,
+                  name: matchedUser.firstName || matchedUser.lastName
+                    ? `${matchedUser.firstName || ''} ${matchedUser.lastName || ''}`.trim()
+                    : null,
+                },
+              })
+            } catch (syncError) {
+              console.error('[Login For Other] Error syncing user to database:', syncError)
+            }
+          }
+
+          return {
+            id: matchedUser.id,
+            email: userEmail,
+            clerkId: matchedUser.id,
+            firstName: matchedUser.firstName,
+            lastName: matchedUser.lastName,
+          }
         }
       }
 
@@ -116,6 +174,10 @@ async function findUserByEmail(email) {
       return null
     } catch (clerkError) {
       console.error('[Login For Other] Error searching Clerk:', clerkError)
+      console.error('[Login For Other] Error details:', {
+        message: clerkError.message,
+        stack: clerkError.stack,
+      })
       return null
     }
   } catch (error) {
