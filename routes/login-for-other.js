@@ -905,15 +905,6 @@ router.post('/verify-credentials', async (req, res) => {
           clerkId: clerkUser.id,
           debug,
         })
-      } catch (dbError) {
-        debug.dbError = dbError.message
-        debug.finalResult = 'DB_ERROR'
-        return res.status(500).json({
-          success: false,
-          error: 'Database error while checking user',
-          debug,
-        })
-      }
     }
 
     // User not found in Clerk
