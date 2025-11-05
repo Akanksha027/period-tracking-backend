@@ -44,20 +44,31 @@ async function sendOTPEmail(email, otp) {
   // Try EmailJS first (no domain required)
   if (emailjsServiceId && emailjsTemplateId && emailjsPublicKey) {
     try {
-      const emailjs = await import('@emailjs/nodejs')
+      // EmailJS uses fetch API for Node.js
+      const emailjsUrl = `https://api.emailjs.com/api/v1.0/email/send`
       
-      const result = await emailjs.send(
-        emailjsServiceId,
-        emailjsTemplateId,
-        {
-          to_email: email,
-          otp_code: otp,
-          message: `Your verification code is: ${otp}. This code expires in 10 minutes.`,
+      const response = await fetch(emailjsUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
-        {
-          publicKey: emailjsPublicKey,
-        }
-      )
+        body: JSON.stringify({
+          service_id: emailjsServiceId,
+          template_id: emailjsTemplateId,
+          user_id: emailjsPublicKey,
+          template_params: {
+            to_email: email,
+            otp_code: otp,
+            message: `Your verification code is: ${otp}. This code expires in 10 minutes.`,
+          },
+        }),
+      })
+
+      const result = await response.json()
+      
+      if (!response.ok) {
+        throw new Error(result.text || 'EmailJS API error')
+      }
 
       console.log('[OTP EMAIL] ✅ Sent successfully via EmailJS:', result)
       return
