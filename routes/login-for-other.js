@@ -822,15 +822,19 @@ router.post('/verify-credentials', async (req, res) => {
       const clerkUser = users.data[0]
       const userEmail = clerkUser.emailAddresses?.[0]?.emailAddress || normalizedEmail
 
-      // CRITICAL: Check if this user exists in our database as a 'SELF' user
-      // Only 'SELF' users can be viewed by 'OTHER' users
-      try {
-        const selfUser = await prisma.user.findFirst({
-          where: {
-            email: normalizedEmail,
-            userType: 'SELF', // Must be a SELF user
-          },
-        })
+        // CRITICAL: Check if this user exists in our database as a 'SELF' user
+        // Only 'SELF' users can be viewed by 'OTHER' users
+        // For backward compatibility, also check for users without userType (they default to SELF)
+        try {
+          const selfUser = await prisma.user.findFirst({
+            where: {
+              email: normalizedEmail,
+              OR: [
+                { userType: 'SELF' }, // Must be a SELF user
+                { userType: null }, // Backward compatibility: existing users without userType are SELF
+              ],
+            },
+          })
 
         debug.selfUserCheck = {
           found: !!selfUser,
@@ -942,10 +946,14 @@ router.post('/send-otp', async (req, res) => {
 
     // CRITICAL: Find the SELF user (the person whose data will be viewed)
     // Only SELF users can be viewed by OTHER users
+    // For backward compatibility, also check for users without userType (they default to SELF)
     const selfUser = await prisma.user.findFirst({
       where: {
         email: normalizedEmail,
-        userType: 'SELF', // Must be a SELF user
+        OR: [
+          { userType: 'SELF' }, // Must be a SELF user
+          { userType: null }, // Backward compatibility: existing users without userType are SELF
+        ],
       },
     })
 
@@ -1091,11 +1099,25 @@ router.post('/verify-otp', async (req, res) => {
       return res.status(404).json({ error: 'User not found in database' })
     }
 
-    // Verify this is a SELF user
-    if (selfUser.userType !== 'SELF') {
+    // Verify this is a SELF user (or null for backward compatibility)
+    if (selfUser.userType && selfUser.userType !== 'SELF') {
       return res.status(400).json({ 
         error: 'Invalid account type. Only "Login for Yourself" accounts can be viewed.',
       })
+    }
+    
+    // Update userType to SELF if it's null (migration for existing users)
+    if (!selfUser.userType) {
+      try {
+        await prisma.user.update({
+          where: { id: selfUser.id },
+          data: { userType: 'SELF' },
+        })
+        selfUser.userType = 'SELF'
+      } catch (updateError) {
+        console.error('[Login For Other] Error updating userType:', updateError)
+        // Continue anyway - userType will be null but we'll allow access
+      }
     }
 
     if (!selfUser.clerkId) {
@@ -1200,8 +1222,29 @@ router.post('/complete-login', async (req, res) => {
 
     // Get the SELF user (whose data will be viewed)
     const selfUser = otpData.user
-    if (!selfUser || selfUser.userType !== 'SELF') {
-      return res.status(404).json({ error: 'Self user not found or invalid account type' })
+    if (!selfUser) {
+      return res.status(404).json({ error: 'Self user not found' })
+    }
+    
+    // Verify this is a SELF user (or null for backward compatibility)
+    if (selfUser.userType && selfUser.userType !== 'SELF') {
+      return res.status(400).json({ 
+        error: 'Invalid account type. Only "Login for Yourself" accounts can be viewed.',
+      })
+    }
+    
+    // Update userType to SELF if it's null (migration for existing users)
+    if (!selfUser.userType) {
+      try {
+        await prisma.user.update({
+          where: { id: selfUser.id },
+          data: { userType: 'SELF' },
+        })
+        selfUser.userType = 'SELF'
+      } catch (updateError) {
+        console.error('[Login For Other] Error updating userType:', updateError)
+        // Continue anyway
+      }
     }
 
     // Create or find the OTHER user (viewer)
