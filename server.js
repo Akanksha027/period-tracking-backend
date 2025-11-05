@@ -7,6 +7,14 @@ import loginForOtherRoutes from './routes/login-for-other.js'
 import periodsRoutes from './routes/periods.js'
 import symptomsRoutes from './routes/symptoms.js'
 import moodsRoutes from './routes/moods.js'
+import chatRoutes from './routes/chat.js'
+
+// Verify chat route is loaded
+if (!chatRoutes) {
+  console.error('[Server] ERROR: Chat routes failed to load!')
+} else {
+  console.log('[Server] Chat routes module loaded successfully')
+}
 
 // Load environment variables
 dotenv.config()
@@ -52,6 +60,9 @@ app.get('/', (req, res) => {
         verifyOtp: 'POST /api/login-for-other/verify-otp',
         completeLogin: 'POST /api/login-for-other/complete-login',
       },
+      chat: {
+        chat: 'POST /api/chat',
+      },
     },
   })
 })
@@ -68,6 +79,10 @@ app.use('/api/login-for-other', loginForOtherRoutes)
 app.use('/api/periods', periodsRoutes)
 app.use('/api/symptoms', symptomsRoutes)
 app.use('/api/moods', moodsRoutes)
+app.use('/api/chat', chatRoutes)
+
+// Log that chat route is registered
+console.log('[Server] Chat route registered at /api/chat')
 
 // 404 handler
 app.use((req, res) => {
