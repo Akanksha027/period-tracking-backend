@@ -331,13 +331,35 @@ router.get('/test-clerk', async (req, res) => {
       let users = null
       try {
         users = await clerk.users.getUserList({ limit: 100 })
+        
+        // Log the full response structure
         debug.apiCall = {
           success: true,
           responseType: typeof users,
+          responseIsNull: users === null,
+          responseIsUndefined: users === undefined,
+          responseKeys: users ? Object.keys(users) : [],
           hasData: !!users?.data,
           dataType: Array.isArray(users?.data) ? 'array' : typeof users?.data,
           totalCount: users?.totalCount,
           hasMore: users?.hasMore,
+          // Try to see what the actual response looks like
+          responsePreview: users ? JSON.stringify(users).substring(0, 500) : 'null',
+        }
+        
+        // If users.data doesn't exist, try alternative response structures
+        if (!users?.data && users) {
+          // Maybe it's a different structure - check if it's an array directly
+          if (Array.isArray(users)) {
+            debug.alternativeStructure = 'Response is array directly'
+            users = { data: users }
+          } else if (users.users && Array.isArray(users.users)) {
+            debug.alternativeStructure = 'Response has users property'
+            users = { data: users.users }
+          } else if (users.items && Array.isArray(users.items)) {
+            debug.alternativeStructure = 'Response has items property'
+            users = { data: users.items }
+          }
         }
       } catch (apiError) {
         debug.apiCall = {
@@ -346,6 +368,7 @@ router.get('/test-clerk', async (req, res) => {
           errorType: apiError.constructor.name,
           statusCode: apiError.statusCode,
           statusText: apiError.statusText,
+          stack: apiError.stack?.substring(0, 500),
         }
         throw apiError
       }
