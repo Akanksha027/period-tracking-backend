@@ -73,21 +73,27 @@ async function findUserByEmail(email) {
 
         // Search for user in Clerk by email
     try {
-      // Clerk API: Get user list and filter by email
-      // Note: Clerk doesn't have a direct "getUserByEmail" API, so we use getUserList with email filter
+      // Clerk API: Try multiple approaches to find user by email
       console.log('[Login For Other] Searching Clerk for email:', normalizedEmail)
       
-      const users = await clerk.users.getUserList({
-        emailAddress: [normalizedEmail],
-        limit: 1,
-      })
+      // Approach 1: Try with emailAddress filter (might not work in all Clerk versions)
+      let users = null
+      try {
+        users = await clerk.users.getUserList({
+          emailAddress: [normalizedEmail],
+          limit: 1,
+        })
+        console.log('[Login For Other] Clerk API response (with emailAddress filter):', JSON.stringify({
+          hasData: !!users?.data,
+          dataLength: users?.data?.length || 0,
+          totalCount: users?.totalCount || 0,
+        }))
+      } catch (filterError) {
+        console.log('[Login For Other] EmailAddress filter failed, trying without filter:', filterError.message)
+        users = null
+      }
 
-      console.log('[Login For Other] Clerk API response:', JSON.stringify({
-        hasData: !!users?.data,
-        dataLength: users?.data?.length || 0,
-        totalCount: users?.totalCount || 0,
-      }))
-
+      // If emailAddress filter worked, check results
       if (users && users.data && users.data.length > 0) {
         const clerkUser = users.data[0]
         const userEmail = clerkUser.emailAddresses?.[0]?.emailAddress || normalizedEmail
@@ -128,13 +134,21 @@ async function findUserByEmail(email) {
 
       // Try alternative: search without email filter and manually filter
       console.log('[Login For Other] Email filter didn\'t work, trying manual search')
-      const allUsers = await clerk.users.getUserList({ limit: 100 })
-      if (allUsers?.data) {
-        const matchedUser = allUsers.data.find(user => 
-          user.emailAddresses?.some(email => 
-            email.emailAddress?.toLowerCase() === normalizedEmail
-          )
-        )
+      try {
+        // Get users in batches to find the one with matching email
+        let allUsers = await clerk.users.getUserList({ limit: 500 })
+        console.log('[Login For Other] Total users retrieved for manual search:', allUsers?.data?.length || 0)
+        
+        if (allUsers?.data && allUsers.data.length > 0) {
+          // Search through all emails (primary and secondary)
+          const matchedUser = allUsers.data.find(user => {
+            if (!user.emailAddresses || user.emailAddresses.length === 0) return false
+            return user.emailAddresses.some(emailObj => {
+              const emailAddr = emailObj?.emailAddress?.toLowerCase()?.trim()
+              console.log('[Login For Other] Checking email:', emailAddr, 'against:', normalizedEmail)
+              return emailAddr === normalizedEmail
+            })
+          })
         
         if (matchedUser) {
           const userEmail = matchedUser.emailAddresses?.[0]?.emailAddress || normalizedEmail
@@ -167,7 +181,11 @@ async function findUserByEmail(email) {
             firstName: matchedUser.firstName,
             lastName: matchedUser.lastName,
           }
+        } else {
+          console.log('[Login For Other] No users found in Clerk database')
         }
+      } catch (manualSearchError) {
+        console.error('[Login For Other] Error in manual search:', manualSearchError)
       }
 
       console.log('[Login For Other] User not found in Clerk for email:', normalizedEmail)
