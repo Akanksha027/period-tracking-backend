@@ -831,14 +831,23 @@ router.post('/verify-otp', async (req, res) => {
   try {
     const { email, otp } = req.body
 
+    console.log('[Login For Other] Verify OTP request:', { email, otp, otpLength: otp?.length })
+
     if (!email || !otp) {
-      return res.status(400).json({ error: 'Email and OTP are required' })
+      console.log('[Login For Other] Missing email or OTP:', { hasEmail: !!email, hasOtp: !!otp })
+      return res.status(400).json({ 
+        error: 'Email and OTP are required',
+        debug: { hasEmail: !!email, hasOtp: !!otp }
+      })
     }
+
+    const normalizedEmail = email.toLowerCase().trim()
+    console.log('[Login For Other] Searching for OTP with email:', normalizedEmail)
 
     // Find the OTP record in database
     const otpData = await prisma.otpCode.findFirst({
       where: {
-        email: email.toLowerCase(),
+        email: normalizedEmail,
         verified: false,
       },
       orderBy: {
@@ -849,9 +858,18 @@ router.post('/verify-otp', async (req, res) => {
       },
     })
 
+    console.log('[Login For Other] OTP record found:', {
+      found: !!otpData,
+      otpId: otpData?.id,
+      otpExpired: otpData ? new Date() > otpData.expiresAt : null,
+      otpMatches: otpData ? otpData.otp === otp : null,
+    })
+
     if (!otpData) {
+      console.log('[Login For Other] No OTP record found for email:', normalizedEmail)
       return res.status(400).json({
         error: 'Invalid or expired OTP. Please request a new one.',
+        debug: { email: normalizedEmail }
       })
     }
 
@@ -866,9 +884,22 @@ router.post('/verify-otp', async (req, res) => {
     }
 
     // Check if OTP matches
+    console.log('[Login For Other] Comparing OTPs:', {
+      storedOtp: otpData.otp,
+      providedOtp: otp,
+      match: otpData.otp === otp,
+      storedType: typeof otpData.otp,
+      providedType: typeof otp,
+    })
+    
     if (otpData.otp !== otp) {
+      console.log('[Login For Other] OTP mismatch')
       return res.status(400).json({
         error: 'Invalid OTP code. Please try again.',
+        debug: { 
+          storedOtpLength: otpData.otp?.length,
+          providedOtpLength: otp?.length,
+        }
       })
     }
 
