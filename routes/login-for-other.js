@@ -93,138 +93,63 @@ async function findUserByEmail(email) {
 
         // Search for user in Clerk by email
     try {
-      // Clerk API: Try multiple approaches to find user by email
+      // Clerk SDK v4+ emailAddress filter doesn't work reliably, so we'll do manual search
       console.log('[Login For Other] Searching Clerk for email:', normalizedEmail)
-      
-      // Approach 1: Try with emailAddress filter (might not work in all Clerk versions)
-      let users = null
-      console.log('[Login For Other] Attempting Clerk API call with emailAddress filter')
-      console.log('[Login For Other] Filter email being used:', normalizedEmail)
+      console.log('[Login For Other] Starting manual search (emailAddress filter not reliable in Clerk SDK v4+)')
       try {
-        const clerkRequest = {
-          emailAddress: [normalizedEmail],
-          limit: 1,
-        }
-        console.log('[Login For Other] Clerk request params:', JSON.stringify(clerkRequest, null, 2))
+        // Get users - Clerk SDK v4+ returns array directly
+        const allUsersResponse = await clerk.users.getUserList({ limit: 500 })
         
-        users = await clerk.users.getUserList(clerkRequest)
-        
-        console.log('[Login For Other] Clerk API response received')
-        console.log('[Login For Other] Response type:', typeof users)
-        console.log('[Login For Other] Response keys:', users ? Object.keys(users) : 'null')
-        
-        const summary = {
-          hasData: !!users?.data,
-          dataLength: users?.data?.length || 0,
-          totalCount: users?.totalCount || 0,
-          hasMore: users?.hasMore || false,
-        }
-        
-        if (users?.data?.length > 0) {
-          const firstUser = users.data[0]
-          summary.firstUserId = firstUser.id
-          summary.firstUserEmails = firstUser.emailAddresses?.map(e => e.emailAddress) || []
-          summary.firstUserEmail = firstUser.emailAddresses?.[0]?.emailAddress || 'none'
-        }
-        
-        console.log('[Login For Other] Clerk API response summary:', JSON.stringify(summary, null, 2))
-        
-        // Also log the raw response (truncated if too long)
-        if (users) {
-          try {
-            const responseStr = JSON.stringify(users, null, 2)
-            if (responseStr.length > 2000) {
-              console.log('[Login For Other] Full Clerk response (first 2000 chars):', responseStr.substring(0, 2000))
-              console.log('[Login For Other] Full Clerk response (last 500 chars):', responseStr.substring(responseStr.length - 500))
-            } else {
-              console.log('[Login For Other] Full Clerk response:', responseStr)
-            }
-          } catch (jsonError) {
-            console.error('[Login For Other] Error stringifying Clerk response:', jsonError)
-            console.log('[Login For Other] Clerk response (raw):', users)
-          }
+        // Normalize response
+        let allUsers = null
+        if (Array.isArray(allUsersResponse)) {
+          allUsers = allUsersResponse
+        } else if (allUsersResponse?.data && Array.isArray(allUsersResponse.data)) {
+          allUsers = allUsersResponse.data
         } else {
-          console.log('[Login For Other] Clerk API returned null or undefined')
+          allUsers = []
         }
-      } catch (filterError) {
-        console.error('[Login For Other] Clerk API call failed with error')
-        console.error('[Login For Other] Error type:', filterError?.constructor?.name || typeof filterError)
-        console.error('[Login For Other] Error message:', filterError?.message)
-        console.error('[Login For Other] Error stack:', filterError?.stack)
-        console.log('[Login For Other] EmailAddress filter failed, trying without filter')
-        users = null
-      }
-
-      // If emailAddress filter worked, check results
-      if (users && users.data && users.data.length > 0) {
-        const clerkUser = users.data[0]
-        const userEmail = clerkUser.emailAddresses?.[0]?.emailAddress || normalizedEmail
-        console.log('[Login For Other] User found in Clerk:', {
-          id: clerkUser.id,
-          email: userEmail,
-          firstName: clerkUser.firstName,
-          lastName: clerkUser.lastName,
-        })
-
-        // Sync user to database if not exists
-        if (!dbUser) {
-          try {
-            await prisma.user.create({
-              data: {
-                email: normalizedEmail,
-                clerkId: clerkUser.id,
-                name: clerkUser.firstName || clerkUser.lastName
-                  ? `${clerkUser.firstName || ''} ${clerkUser.lastName || ''}`.trim()
-                  : null,
-              },
-            })
-            console.log('[Login For Other] User synced to database')
-          } catch (syncError) {
-            console.error('[Login For Other] Error syncing user to database:', syncError)
-            // Continue anyway - user exists in Clerk
-          }
-        }
-
-        console.log('[Login For Other] ===== END findUserByEmail - USER FOUND (emailAddress filter) =====')
-        return {
-          id: clerkUser.id,
-          email: userEmail,
-          clerkId: clerkUser.id,
-          firstName: clerkUser.firstName,
-          lastName: clerkUser.lastName,
-        }
-      }
-
-      // Try alternative: search without email filter and manually filter
-      console.log('[Login For Other] Email filter didn\'t work, trying manual search')
-      try {
-        // Get users in batches to find the one with matching email
-        let allUsers = await clerk.users.getUserList({ limit: 500 })
-        console.log('[Login For Other] Total users retrieved for manual search:', allUsers?.data?.length || 0)
         
-        if (allUsers?.data && allUsers.data.length > 0) {
-          console.log('[Login For Other] Starting manual search through', allUsers.data.length, 'users')
-          // Search through all emails (primary and secondary)
-          let checkedCount = 0
-          const matchedUser = allUsers.data.find(user => {
-            if (!user.emailAddresses || user.emailAddresses.length === 0) return false
-            return user.emailAddresses.some(emailObj => {
-              const emailAddr = emailObj?.emailAddress?.toLowerCase()?.trim()
-              checkedCount++
-              if (checkedCount <= 5 || emailAddr === normalizedEmail) {
-                console.log('[Login For Other] Checking email:', emailAddr, 'against:', normalizedEmail, 'Match:', emailAddr === normalizedEmail)
+        console.log('[Login For Other] Total users retrieved for manual search:', allUsers.length)
+        
+        if (allUsers.length > 0) {
+          console.log('[Login For Other] Starting manual search through', allUsers.length, 'users')
+          
+          // Search through users by fetching full details and checking emails
+          let matchedUser = null
+          for (const user of allUsers) {
+            try {
+              // Get full user details to access emailAddresses
+              const fullUser = await clerk.users.getUser(user.id)
+              
+              if (fullUser.emailAddresses && fullUser.emailAddresses.length > 0) {
+                // Check each email address
+                for (const emailObj of fullUser.emailAddresses) {
+                  const emailAddr = emailObj?.emailAddress?.toLowerCase()?.trim()
+                  console.log('[Login For Other] Checking email:', emailAddr, 'against:', normalizedEmail, 'Match:', emailAddr === normalizedEmail)
+                  
+                  if (emailAddr === normalizedEmail) {
+                    matchedUser = fullUser
+                    console.log('[Login For Other] User found via manual search:', {
+                      id: fullUser.id,
+                      email: emailObj.emailAddress,
+                    })
+                    break
+                  }
+                }
               }
-              return emailAddr === normalizedEmail
-            })
-          })
-          console.log('[Login For Other] Manual search completed. Checked', checkedCount, 'email addresses. Found match:', !!matchedUser)
+              
+              if (matchedUser) break
+            } catch (userError) {
+              // Skip if we can't fetch user details
+              continue
+            }
+          }
+          
+          console.log('[Login For Other] Manual search completed. Found match:', !!matchedUser)
 
           if (matchedUser) {
             const userEmail = matchedUser.emailAddresses?.[0]?.emailAddress || normalizedEmail
-            console.log('[Login For Other] User found via manual search:', {
-              id: matchedUser.id,
-              email: userEmail,
-            })
 
             // Sync to database if not exists
             if (!dbUser) {
@@ -391,39 +316,36 @@ router.get('/test-clerk', async (req, res) => {
       }
 
       // Get all users with detailed error handling
-      let users = null
+      let usersResponse = null
       try {
-        users = await clerk.users.getUserList({ limit: 100 })
+        usersResponse = await clerk.users.getUserList({ limit: 100 })
         
-        // Log the full response structure
+        // Clerk SDK v4+ returns an array directly, not { data: [...] }
+        // Normalize to consistent structure
+        let users = null
+        if (Array.isArray(usersResponse)) {
+          // Response is array directly
+          users = { data: usersResponse }
+        } else if (usersResponse?.data && Array.isArray(usersResponse.data)) {
+          // Response has data property
+          users = usersResponse
+        } else if (usersResponse?.users && Array.isArray(usersResponse.users)) {
+          // Response has users property
+          users = { data: usersResponse.users }
+        } else {
+          // Unknown structure
+          users = { data: [] }
+        }
+        
         debug.apiCall = {
           success: true,
-          responseType: typeof users,
-          responseIsNull: users === null,
-          responseIsUndefined: users === undefined,
-          responseKeys: users ? Object.keys(users) : [],
-          hasData: !!users?.data,
-          dataType: Array.isArray(users?.data) ? 'array' : typeof users?.data,
-          totalCount: users?.totalCount,
-          hasMore: users?.hasMore,
-          // Try to see what the actual response looks like
-          responsePreview: users ? JSON.stringify(users).substring(0, 500) : 'null',
+          responseType: typeof usersResponse,
+          isArray: Array.isArray(usersResponse),
+          normalizedUsersCount: users?.data?.length || 0,
         }
         
-        // If users.data doesn't exist, try alternative response structures
-        if (!users?.data && users) {
-          // Maybe it's a different structure - check if it's an array directly
-          if (Array.isArray(users)) {
-            debug.alternativeStructure = 'Response is array directly'
-            users = { data: users }
-          } else if (users.users && Array.isArray(users.users)) {
-            debug.alternativeStructure = 'Response has users property'
-            users = { data: users.users }
-          } else if (users.items && Array.isArray(users.items)) {
-            debug.alternativeStructure = 'Response has items property'
-            users = { data: users.items }
-          }
-        }
+        // Store normalized users for processing
+        usersResponse = users
       } catch (apiError) {
         debug.apiCall = {
           success: false,
@@ -436,27 +358,36 @@ router.get('/test-clerk', async (req, res) => {
         throw apiError
       }
 
-      debug.usersFound = users?.data?.length || 0
+      debug.usersFound = usersResponse?.data?.length || 0
       
-      if (users?.data && users.data.length > 0) {
-        // Extract all emails
-        users.data.forEach(user => {
-          if (user.emailAddresses && user.emailAddresses.length > 0) {
-            user.emailAddresses.forEach(emailObj => {
-              if (emailObj?.emailAddress) {
-                debug.allEmails.push(emailObj.emailAddress.toLowerCase().trim())
-              }
-            })
+      if (usersResponse?.data && usersResponse.data.length > 0) {
+        // Extract all emails - need to fetch full user details to get emailAddresses
+        for (const user of usersResponse.data.slice(0, 10)) {
+          try {
+            // Get full user details to access emailAddresses
+            const fullUser = await clerk.users.getUser(user.id)
+            if (fullUser.emailAddresses && fullUser.emailAddresses.length > 0) {
+              fullUser.emailAddresses.forEach(emailObj => {
+                if (emailObj?.emailAddress) {
+                  debug.allEmails.push(emailObj.emailAddress.toLowerCase().trim())
+                }
+              })
+            }
+            
+            // Add to sample users
+            if (debug.sampleUsers.length < 5) {
+              debug.sampleUsers.push({
+                id: fullUser.id,
+                emails: fullUser.emailAddresses?.map(e => e.emailAddress) || [],
+                firstName: fullUser.firstName,
+                lastName: fullUser.lastName,
+              })
+            }
+          } catch (userError) {
+            // Skip if we can't fetch user details
+            console.error(`Error fetching user ${user.id}:`, userError.message)
           }
-        })
-
-        // Sample first 5 users
-        debug.sampleUsers = users.data.slice(0, 5).map(user => ({
-          id: user.id,
-          emails: user.emailAddresses?.map(e => e.emailAddress) || [],
-          firstName: user.firstName,
-          lastName: user.lastName,
-        }))
+        }
       } else {
         debug.warning = 'Clerk API call succeeded but returned no users. This might mean: 1) The CLERK_SECRET_KEY is for a different Clerk instance, 2) There are no users in this instance, 3) The API key lacks permissions.'
       }
@@ -520,58 +451,71 @@ router.post('/verify-credentials', async (req, res) => {
       debug.dbError = dbError.message
     }
 
-    // Try Clerk API with emailAddress filter
+    // Try Clerk API - get all users and search manually
+    // Note: emailAddress filter may not work in Clerk SDK v4+, so we'll search manually
     let users = null
     try {
       debug.clerkApiCalled = true
-      users = await clerk.users.getUserList({
-        emailAddress: [normalizedEmail],
-        limit: 1,
-      })
-      debug.clerkResponse = {
-        hasData: !!users?.data,
-        dataLength: users?.data?.length || 0,
-        totalCount: users?.totalCount || 0,
-        firstUserEmails: users?.data?.[0]?.emailAddresses?.map(e => e.emailAddress) || [],
+      
+      // Get all users (Clerk SDK v4+ returns array directly)
+      const allUsersResponse = await clerk.users.getUserList({ limit: 500 })
+      
+      // Normalize response - Clerk returns array directly
+      let allUsers = null
+      if (Array.isArray(allUsersResponse)) {
+        allUsers = allUsersResponse
+      } else if (allUsersResponse?.data && Array.isArray(allUsersResponse.data)) {
+        allUsers = allUsersResponse.data
+      } else {
+        allUsers = []
+      }
+      
+      debug.manualSearchResults = {
+        totalRetrieved: allUsers.length,
+        emailsChecked: [],
+      }
+
+      // Search through users by fetching full details and checking emails
+      let matchedUser = null
+      for (const user of allUsers.slice(0, 100)) { // Limit to first 100 to avoid too many API calls
+        try {
+          // Get full user details to access emailAddresses
+          const fullUser = await clerk.users.getUser(user.id)
+          
+          if (fullUser.emailAddresses && fullUser.emailAddresses.length > 0) {
+            // Check each email address
+            for (const emailObj of fullUser.emailAddresses) {
+              const emailAddr = emailObj?.emailAddress?.toLowerCase()?.trim()
+              
+              if (debug.manualSearchResults.emailsChecked.length < 10) {
+                debug.manualSearchResults.emailsChecked.push(emailAddr)
+              }
+              
+              if (emailAddr === normalizedEmail) {
+                matchedUser = fullUser
+                debug.manualSearchResults.matchFound = true
+                debug.manualSearchResults.matchedEmail = emailObj.emailAddress
+                break
+              }
+            }
+          }
+          
+          if (matchedUser) break
+        } catch (userError) {
+          // Skip if we can't fetch user details
+          continue
+        }
+      }
+
+      if (matchedUser) {
+        users = { data: [matchedUser] }
+      } else {
+        debug.manualSearchResults.matchFound = false
       }
     } catch (clerkError) {
       debug.clerkError = {
         message: clerkError?.message,
         type: clerkError?.constructor?.name,
-      }
-    }
-
-    // If emailAddress filter didn't work, try manual search
-    if (!users || !users.data || users.data.length === 0) {
-      try {
-        const allUsers = await clerk.users.getUserList({ limit: 500 })
-        debug.manualSearchResults = {
-          totalRetrieved: allUsers?.data?.length || 0,
-          emailsChecked: [],
-        }
-
-        if (allUsers?.data) {
-          const matchedUser = allUsers.data.find(user => {
-            if (!user.emailAddresses || user.emailAddresses.length === 0) return false
-            return user.emailAddresses.some(emailObj => {
-              const emailAddr = emailObj?.emailAddress?.toLowerCase()?.trim()
-              if (debug.manualSearchResults.emailsChecked.length < 10) {
-                debug.manualSearchResults.emailsChecked.push(emailAddr)
-              }
-              return emailAddr === normalizedEmail
-            })
-          })
-
-          if (matchedUser) {
-            users = { data: [matchedUser] }
-            debug.manualSearchResults.matchFound = true
-            debug.manualSearchResults.matchedEmail = matchedUser.emailAddresses?.[0]?.emailAddress
-          } else {
-            debug.manualSearchResults.matchFound = false
-          }
-        }
-      } catch (manualError) {
-        debug.manualSearchError = manualError.message
       }
     }
 
