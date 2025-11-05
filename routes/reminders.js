@@ -385,5 +385,250 @@ router.get('/status', verifyClerkAuth, async (req, res) => {
   }
 })
 
+/**
+ * GET /api/reminders/test - Test endpoint (for development only)
+ * This allows testing without authentication
+ */
+router.get('/test', async (req, res) => {
+  try {
+    // For testing, accept email as query parameter
+    const { email } = req.query
+
+    if (!email) {
+      return res.status(400).json({ 
+        error: 'Email parameter required for testing',
+        example: '/api/reminders/test?email=your-email@example.com'
+      })
+    }
+
+    // Find user by email
+    const dbUser = await prisma.user.findFirst({
+      where: { email },
+      include: {
+        settings: true,
+        periods: {
+          orderBy: { startDate: 'desc' },
+          take: 6,
+        },
+      },
+    })
+
+    if (!dbUser) {
+      return res.status(404).json({ error: `User not found with email: ${email}` })
+    }
+
+    // Check if reminders are enabled
+    if (!dbUser.settings || !dbUser.settings.reminderEnabled) {
+      return res.json({ 
+        success: false, 
+        message: 'Reminders are disabled for this user',
+        reminder: null 
+      })
+    }
+
+    // Get today's symptoms and moods
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const tomorrow = new Date(today)
+    tomorrow.setDate(tomorrow.getDate() + 1)
+
+    const [symptoms, moods] = await Promise.all([
+      prisma.symptom.findMany({
+        where: {
+          userId: dbUser.id,
+          date: {
+            gte: today,
+            lt: tomorrow,
+          },
+        },
+      }),
+      prisma.mood.findMany({
+        where: {
+          userId: dbUser.id,
+          date: {
+            gte: today,
+            lt: tomorrow,
+          },
+        },
+      }),
+    ])
+
+    // Calculate cycle info
+    const userPeriodLength = dbUser.settings?.periodDuration || dbUser.settings?.averagePeriodLength || 5
+    const avgCycleLength = dbUser.settings?.averageCycleLength || 28
+
+    if (!dbUser.periods || dbUser.periods.length === 0) {
+      return res.json({ 
+        success: false, 
+        message: 'No period data available for reminders',
+        reminder: null 
+      })
+    }
+
+    const lastPeriod = dbUser.periods[0]
+    const lastPeriodStart = new Date(lastPeriod.startDate)
+    lastPeriodStart.setHours(0, 0, 0, 0)
+
+    let lastPeriodEnd = new Date(lastPeriodStart)
+    if (lastPeriod.endDate) {
+      lastPeriodEnd = new Date(lastPeriod.endDate)
+    } else {
+      lastPeriodEnd.setDate(lastPeriodEnd.getDate() + userPeriodLength - 1)
+    }
+    lastPeriodEnd.setHours(0, 0, 0, 0)
+
+    const activePeriod = dbUser.periods.find(period => {
+      const start = new Date(period.startDate)
+      const startLocal = new Date(start.getFullYear(), start.getMonth(), start.getDate())
+      startLocal.setHours(0, 0, 0, 0)
+
+      let endLocal = null
+      if (period.endDate) {
+        const end = new Date(period.endDate)
+        endLocal = new Date(end.getFullYear(), end.getMonth(), end.getDate())
+        endLocal.setHours(0, 0, 0, 0)
+      } else {
+        endLocal = new Date(startLocal)
+        endLocal.setDate(endLocal.getDate() + userPeriodLength - 1)
+      }
+
+      return startLocal <= today && endLocal >= today
+    })
+
+    let cycleInfo = null
+    if (activePeriod) {
+      const periodStart = new Date(activePeriod.startDate)
+      const periodStartLocal = new Date(periodStart.getFullYear(), periodStart.getMonth(), periodStart.getDate())
+      periodStartLocal.setHours(0, 0, 0, 0)
+
+      const diff = Math.floor((today.getTime() - periodStartLocal.getTime()) / (1000 * 60 * 60 * 24))
+      const daysInPeriod = diff + 1
+
+      cycleInfo = {
+        cycleDay: daysInPeriod,
+        phase: 'Menstrual',
+        phaseDescription: `Day ${daysInPeriod} of period`,
+        isOnPeriod: true,
+      }
+    } else {
+      const daysSinceLastPeriodEnd = Math.floor((today.getTime() - lastPeriodEnd.getTime()) / (1000 * 60 * 60 * 24))
+
+      if (daysSinceLastPeriodEnd >= 0) {
+        const currentCycleDay = daysSinceLastPeriodEnd + 1 + userPeriodLength
+
+        const ovulationDay = Math.round(avgCycleLength / 2)
+        const fertileStart = ovulationDay - 5
+        const fertileEnd = ovulationDay
+
+        let phase = 'Follicular'
+        if (currentCycleDay >= fertileStart && currentCycleDay <= fertileEnd) {
+          phase = 'Ovulation'
+        } else if (currentCycleDay > fertileEnd) {
+          phase = 'Luteal'
+        }
+
+        cycleInfo = {
+          cycleDay: currentCycleDay,
+          phase,
+          phaseDescription: `Day ${currentCycleDay} of ${avgCycleLength}-day cycle (${phase} Phase)`,
+          isOnPeriod: false,
+        }
+      }
+    }
+
+    if (!cycleInfo) {
+      return res.json({ 
+        success: false, 
+        message: 'Unable to calculate cycle information',
+        reminder: null 
+      })
+    }
+
+    // Generate reminder using AI
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({ error: 'AI service is not configured' })
+    }
+
+    const genAI = getGeminiClient()
+    const model = genAI.getGenerativeModel({ model: 'gemini-pro' })
+
+    const userName = dbUser.name || email.split('@')[0]
+    const todaySymptoms = symptoms.map(s => s.type).join(', ') || 'none'
+    const todayMoods = moods.map(m => m.type).join(', ') || 'none'
+
+    const context = `
+User: ${userName}
+Current Phase: ${cycleInfo.phase}
+Cycle Day: ${cycleInfo.cycleDay}
+Phase Description: ${cycleInfo.phaseDescription}
+Today's Symptoms: ${todaySymptoms}
+Today's Moods: ${todayMoods}
+Average Cycle Length: ${avgCycleLength} days
+Average Period Length: ${userPeriodLength} days
+`
+
+    const prompt = `You are a supportive and caring period health assistant. Generate a personalized reminder message for a user based on their cycle phase and today's mood/symptoms.
+
+${context}
+
+Generate a short, warm, and supportive reminder message (2-3 sentences max) that includes:
+1. A brief acknowledgment of their current cycle phase
+2. A motivational or supportive message tailored to their phase
+3. A helpful tip or knowledge based on their phase and today's mood/symptoms
+
+The message should be:
+- Warm, supportive, and empathetic
+- Phase-appropriate (mention their phase if relevant)
+- Consider their mood today (if they're feeling down, be extra supportive)
+- Include one practical tip or knowledge
+- Keep it concise (2-3 sentences)
+
+Generate ONLY the reminder message, no additional text or explanations.`
+
+    const result = await model.generateContent(prompt)
+    const response = await result.response
+    const reminderText = response.text().trim()
+
+    // Save reminder to database
+    const reminder = await prisma.reminder.create({
+      data: {
+        userId: dbUser.id,
+        message: reminderText,
+        phase: cycleInfo.phase,
+        cycleDay: cycleInfo.cycleDay,
+        sentAt: new Date(),
+      },
+    })
+
+    return res.json({
+      success: true,
+      test: true,
+      user: {
+        email: dbUser.email,
+        name: dbUser.name,
+      },
+      cycleInfo,
+      todayData: {
+        symptoms: symptoms.map(s => ({ type: s.type, severity: s.severity })),
+        moods: moods.map(m => m.type),
+      },
+      reminder: {
+        id: reminder.id,
+        message: reminderText,
+        phase: cycleInfo.phase,
+        cycleDay: cycleInfo.cycleDay,
+        sentAt: reminder.sentAt,
+      },
+    })
+  } catch (error) {
+    console.error('[Reminder Test] Error:', error)
+    return res.status(500).json({ 
+      error: 'Failed to generate reminder',
+      details: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+    })
+  }
+})
+
 export default router
 

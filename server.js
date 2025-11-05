@@ -64,6 +64,11 @@ app.get('/', (req, res) => {
       chat: {
         chat: 'POST /api/chat',
       },
+      reminders: {
+        generate: 'POST /api/reminders/generate',
+        status: 'GET /api/reminders/status',
+        test: 'GET /api/reminders/test?email=your-email@example.com',
+      },
     },
   })
 })
