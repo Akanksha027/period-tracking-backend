@@ -42,40 +42,68 @@ async function sendOTPEmail(email, otp) {
   const emailjsPublicKey = process.env.EMAILJS_PUBLIC_KEY
 
   // Try EmailJS first (no domain required)
+  console.log('[OTP EMAIL] Checking EmailJS configuration:', {
+    hasServiceId: !!emailjsServiceId,
+    hasTemplateId: !!emailjsTemplateId,
+    hasPublicKey: !!emailjsPublicKey,
+  })
+
   if (emailjsServiceId && emailjsTemplateId && emailjsPublicKey) {
     try {
+      console.log('[OTP EMAIL] Attempting to send via EmailJS...')
       // EmailJS uses fetch API for Node.js
       const emailjsUrl = `https://api.emailjs.com/api/v1.0/email/send`
+      
+      const requestBody = {
+        service_id: emailjsServiceId,
+        template_id: emailjsTemplateId,
+        user_id: emailjsPublicKey,
+        template_params: {
+          to_email: email,
+          otp_code: otp,
+          message: `Your verification code is: ${otp}. This code expires in 10 minutes.`,
+        },
+      }
+
+      console.log('[OTP EMAIL] EmailJS request:', {
+        service_id: emailjsServiceId,
+        template_id: emailjsTemplateId,
+        user_id: emailjsPublicKey ? emailjsPublicKey.substring(0, 10) + '...' : 'missing',
+        to_email: email,
+      })
       
       const response = await fetch(emailjsUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          service_id: emailjsServiceId,
-          template_id: emailjsTemplateId,
-          user_id: emailjsPublicKey,
-          template_params: {
-            to_email: email,
-            otp_code: otp,
-            message: `Your verification code is: ${otp}. This code expires in 10 minutes.`,
-          },
-        }),
+        body: JSON.stringify(requestBody),
       })
 
       const result = await response.json()
       
+      console.log('[OTP EMAIL] EmailJS response:', {
+        status: response.status,
+        statusText: response.statusText,
+        result: result,
+      })
+      
       if (!response.ok) {
-        throw new Error(result.text || 'EmailJS API error')
+        throw new Error(result.text || result.message || 'EmailJS API error')
       }
 
-      console.log('[OTP EMAIL] ✅ Sent successfully via EmailJS:', result)
+      console.log('[OTP EMAIL] ✅ Sent successfully via EmailJS')
       return
     } catch (error) {
       console.error('[OTP EMAIL] EmailJS error:', error)
+      console.error('[OTP EMAIL] Error details:', {
+        message: error?.message,
+        stack: error?.stack,
+      })
       // Fall through to Resend or console log
     }
+  } else {
+    console.log('[OTP EMAIL] ⚠️  EmailJS not configured - missing credentials')
   }
 
   // Fallback to Resend if EmailJS not configured
