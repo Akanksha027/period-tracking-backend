@@ -63,6 +63,7 @@ async function sendOTPEmail(email, otp) {
 async function findUserByEmail(email) {
   try {
     const normalizedEmail = email.toLowerCase().trim()
+    console.log('[Login For Other] Finding user by email:', normalizedEmail)
 
     // First, try to find user in our database (Prisma)
     // This is faster and more reliable than querying Supabase Auth
@@ -71,16 +72,23 @@ async function findUserByEmail(email) {
     })
 
     if (dbUser && dbUser.supabaseId) {
+      console.log('[Login For Other] User found in database, fetching from Supabase Auth...')
       // User exists in database, get from Supabase Auth
       try {
         const { data: { user }, error: getUserError } = await supabaseAdmin.auth.admin.getUserById(dbUser.supabaseId)
         if (!getUserError && user) {
+          console.log('[Login For Other] User found via database lookup:', user.email)
           return user
+        } else {
+          console.error('[Login For Other] Error getting user by ID:', getUserError)
+          // Continue to fallback method
         }
       } catch (getUserError) {
-        console.error('[Login For Other] Error getting user by ID:', getUserError)
+        console.error('[Login For Other] Exception getting user by ID:', getUserError)
         // Continue to fallback method
       }
+    } else {
+      console.log('[Login For Other] User not found in database, searching Supabase Auth...')
     }
 
     // Fallback: Search Supabase Auth directly
@@ -108,7 +116,11 @@ async function findUserByEmail(email) {
       // Search for user with matching email
       const user = users.find(u => {
         const userEmail = u.email?.toLowerCase().trim()
-        return userEmail === normalizedEmail
+        const matches = userEmail === normalizedEmail
+        if (matches) {
+          console.log('[Login For Other] User found in Supabase Auth:', userEmail)
+        }
+        return matches
       })
 
       if (user) {
@@ -123,9 +135,11 @@ async function findUserByEmail(email) {
       }
     }
 
+    console.log('[Login For Other] User not found in Supabase Auth after searching', page - 1, 'page(s)')
     return null
   } catch (error) {
     console.error('[Login For Other] Error finding user:', error)
+    console.error('[Login For Other] Error stack:', error.stack)
     return null
   }
 }
@@ -139,43 +153,62 @@ router.post('/verify-credentials', async (req, res) => {
     const { email, password } = req.body
 
     if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' })
+      return res.status(400).json({ error: 'Email and password are required' }) 
     }
+
+    console.log('[Login For Other] Verifying credentials for email:', email)
 
     // Check if user exists in Supabase Auth
     const user = await findUserByEmail(email)
 
     if (!user) {
+      console.log('[Login For Other] User not found for email:', email)
       return res.status(404).json({
+        success: false,
         error: 'No account found with this email address',
       })
     }
 
+    console.log('[Login For Other] User found:', user.id, user.email)
+
     // Verify password by attempting to sign in
     try {
+      console.log('[Login For Other] Attempting to sign in with Supabase Auth...')
       const { data: authData, error: signInError } = await supabaseAdmin.auth.signInWithPassword({
-        email: email.toLowerCase(),
+        email: email.toLowerCase().trim(),
         password,
       })
 
-      if (signInError || !authData.user) {
+      if (signInError) {
+        console.error('[Login For Other] Sign in error:', signInError.message, signInError.status)
+        return res.status(401).json({
+          success: false,
+          error: 'Invalid email or password',
+          details: signInError.message,
+        })
+      }
+
+      if (!authData.user) {
+        console.error('[Login For Other] No user returned from sign in')
         return res.status(401).json({
           success: false,
           error: 'Invalid email or password',
         })
       }
 
+      console.log('[Login For Other] Credentials verified successfully for:', authData.user.email)
       // Credentials are valid
       res.json({
         success: true,
         message: 'Credentials verified successfully',
-        email: email.toLowerCase(),
+        email: email.toLowerCase().trim(),
       })
     } catch (authError) {
       console.error('[Login For Other] Auth error:', authError)
       return res.status(401).json({
         success: false,
         error: 'Invalid email or password',
+        details: authError.message,
       })
     }
   } catch (error) {
