@@ -82,10 +82,32 @@ async function sendOTPEmail(email, otp) {
       text: `Your verification code is: ${otp}\n\nThis code expires in 10 minutes.\n\nIf you didn't request this, please ignore this email.`,
     })
 
-    console.log('[OTP EMAIL] Sent successfully via Resend:', result)
+    console.log('[OTP EMAIL] Resend API response:', result)
+    
+    // Check if there was an error in the response
+    if (result.error) {
+      console.error('[OTP EMAIL] Resend API error:', result.error)
+      
+      // If it's a domain verification error, provide helpful message
+      if (result.error.statusCode === 403 && result.error.message?.includes('verify a domain')) {
+        console.error('[OTP EMAIL] ⚠️  Domain verification required:')
+        console.error('   Resend free tier only allows sending to your verified email.')
+        console.error('   To send to any email, verify a domain at: https://resend.com/domains')
+        console.error('   Then update RESEND_FROM_EMAIL to use your verified domain.')
+        // Don't throw - OTP is still generated, just not sent via email
+        return
+      }
+      
+      throw new Error(`Resend API error: ${result.error.message}`)
+    }
+    
+    if (result.data) {
+      console.log('[OTP EMAIL] ✅ Sent successfully via Resend. Email ID:', result.data.id)
+    }
   } catch (error) {
     console.error('[OTP EMAIL] Error sending via Resend:', error)
-    throw error
+    // Don't throw - OTP is still generated and stored, just not sent via email
+    // This allows the flow to continue even if email fails
   }
 }
 
