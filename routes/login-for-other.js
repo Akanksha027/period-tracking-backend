@@ -60,21 +60,80 @@ async function sendOTPEmail(email, otp) {
       })
 
       const mailOptions = {
-        from: gmailUser,
+        from: `"Period Partner" <${gmailUser}>`,
         to: email,
-        subject: 'Login Verification Code - Period Tracker',
+        subject: 'Your Period Partner Verification Code',
         html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #333;">Login Verification Code</h2>
-            <p>Your verification code for "Login for Someone Else" is:</p>
-            <div style="background-color: #f4f4f4; padding: 20px; text-align: center; margin: 20px 0; border-radius: 5px;">
-              <h1 style="color: #0066cc; font-size: 32px; margin: 0; letter-spacing: 5px;">${otp}</h1>
-            </div>
-            <p style="color: #666; font-size: 14px;">This code expires in 10 minutes.</p>
-            <p style="color: #666; font-size: 14px;">If you didn't request this code, please ignore this email.</p>
-          </div>
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          </head>
+          <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f5f5f5;">
+            <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #f5f5f5;">
+              <tr>
+                <td align="center" style="padding: 40px 20px;">
+                  <table role="presentation" style="width: 100%; max-width: 600px; border-collapse: collapse; background-color: #ffffff; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                    <!-- Header -->
+                    <tr>
+                      <td style="padding: 40px 40px 30px; text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 12px 12px 0 0;">
+                        <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 600; letter-spacing: -0.5px;">Period Partner</h1>
+                        <p style="margin: 8px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Your trusted period tracking companion</p>
+                      </td>
+                    </tr>
+                    
+                    <!-- Content -->
+                    <tr>
+                      <td style="padding: 40px 40px 30px;">
+                        <h2 style="margin: 0 0 16px; color: #1a1a1a; font-size: 24px; font-weight: 600;">Verification Code</h2>
+                        <p style="margin: 0 0 24px; color: #666666; font-size: 16px; line-height: 1.5;">Hello,</p>
+                        <p style="margin: 0 0 32px; color: #666666; font-size: 16px; line-height: 1.5;">Someone is requesting to access a Period Partner account associated with this email address. Use the verification code below to complete the login:</p>
+                        
+                        <!-- OTP Code Box -->
+                        <table role="presentation" style="width: 100%; border-collapse: collapse; margin: 32px 0;">
+                          <tr>
+                            <td align="center" style="padding: 0;">
+                              <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 12px; padding: 32px; text-align: center; box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);">
+                                <div style="color: #ffffff; font-size: 36px; font-weight: 700; letter-spacing: 8px; font-family: 'Courier New', monospace; margin: 0;">${otp}</div>
+                              </div>
+                            </td>
+                          </tr>
+                        </table>
+                        
+                        <p style="margin: 32px 0 0; color: #999999; font-size: 14px; line-height: 1.5;">⏰ This code will expire in <strong style="color: #667eea;">10 minutes</strong>.</p>
+                        <p style="margin: 16px 0 0; color: #999999; font-size: 14px; line-height: 1.5;">🔒 If you didn't request this code, please ignore this email. Your account remains secure.</p>
+                      </td>
+                    </tr>
+                    
+                    <!-- Footer -->
+                    <tr>
+                      <td style="padding: 30px 40px; background-color: #f9f9f9; border-radius: 0 0 12px 12px; border-top: 1px solid #eeeeee;">
+                        <p style="margin: 0 0 8px; color: #999999; font-size: 12px; text-align: center;">This email was sent by Period Partner</p>
+                        <p style="margin: 0; color: #cccccc; font-size: 11px; text-align: center;">© ${new Date().getFullYear()} Period Partner. All rights reserved.</p>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </body>
+          </html>
         `,
-        text: `Your verification code is: ${otp}\n\nThis code expires in 10 minutes.\n\nIf you didn't request this, please ignore this email.`,
+        text: `Period Partner - Verification Code
+
+Hello,
+
+Someone is requesting to access a Period Partner account associated with this email address. Use the verification code below to complete the login:
+
+${otp}
+
+⏰ This code will expire in 10 minutes.
+
+🔒 If you didn't request this code, please ignore this email. Your account remains secure.
+
+---
+© ${new Date().getFullYear()} Period Partner. All rights reserved.`,
       }
 
       const info = await transporter.sendMail(mailOptions)
@@ -244,11 +303,10 @@ async function sendOTPEmail(email, otp) {
   console.log(`Your verification code is: ${otp}`)
   console.log(`This code expires in 10 minutes.`)
   console.log('='.repeat(80))
-  console.log('⚠️  To enable email sending, configure EmailJS (recommended - no domain needed):')
-  console.log('   1. Go to https://www.emailjs.com/ and sign up (free)')
-  console.log('   2. Create an email service (Gmail works)')
-  console.log('   3. Create an email template')
-  console.log('   4. Add to Vercel: EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, EMAILJS_PUBLIC_KEY')
+  console.log('⚠️  To enable email sending, configure Gmail SMTP (recommended - free, no domain needed):')
+  console.log('   1. Enable 2-Step Verification on your Google Account')
+  console.log('   2. Generate App Password: https://myaccount.google.com/apppasswords')
+  console.log('   3. Add to Vercel: GMAIL_USER and GMAIL_APP_PASSWORD')
 }
 
 /**
