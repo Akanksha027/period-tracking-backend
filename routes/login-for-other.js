@@ -84,6 +84,64 @@ async function findUserByEmail(email) {
 }
 
 /**
+ * POST /api/login-for-other/verify-credentials
+ * Verify email and password credentials
+ */
+router.post('/verify-credentials', async (req, res) => {
+  try {
+    const { email, password } = req.body
+
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' })
+    }
+
+    // Check if user exists in Supabase Auth
+    const user = await findUserByEmail(email)
+
+    if (!user) {
+      return res.status(404).json({
+        error: 'No account found with this email address',
+      })
+    }
+
+    // Verify password by attempting to sign in
+    try {
+      const { data: authData, error: signInError } = await supabaseAdmin.auth.signInWithPassword({
+        email: email.toLowerCase(),
+        password,
+      })
+
+      if (signInError || !authData.user) {
+        return res.status(401).json({
+          success: false,
+          error: 'Invalid email or password',
+        })
+      }
+
+      // Credentials are valid
+      res.json({
+        success: true,
+        message: 'Credentials verified successfully',
+        email: email.toLowerCase(),
+      })
+    } catch (authError) {
+      console.error('[Login For Other] Auth error:', authError)
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid email or password',
+      })
+    }
+  } catch (error) {
+    console.error('[Login For Other] Verify credentials error:', error)
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error', 
+      details: error.message 
+    })
+  }
+})
+
+/**
  * POST /api/login-for-other/check-email
  * Check if email exists in the system
  */
