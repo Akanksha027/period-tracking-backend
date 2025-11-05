@@ -298,6 +298,69 @@ async function findUserByEmail(email) {
 }
 
 /**
+ * GET /api/login-for-other/test-clerk/:userId
+ * Test endpoint to search for a specific user by Clerk User ID
+ */
+router.get('/test-clerk/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params
+    const debug = {
+      userId: userId,
+      clerkAvailable: false,
+      userFound: false,
+      userData: null,
+      error: null,
+    }
+
+    try {
+      if (!clerk || !clerk.users) {
+        debug.error = 'Clerk client not initialized'
+        return res.status(500).json({ success: false, debug })
+      }
+
+      debug.clerkAvailable = true
+
+      // Try to get user by ID
+      try {
+        const user = await clerk.users.getUser(userId)
+        debug.userFound = !!user
+        if (user) {
+          debug.userData = {
+            id: user.id,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            emails: user.emailAddresses?.map(e => e.emailAddress) || [],
+            primaryEmail: user.emailAddresses?.[0]?.emailAddress || null,
+            createdAt: user.createdAt,
+            updatedAt: user.updatedAt,
+          }
+        }
+        res.json({ success: true, debug })
+      } catch (getUserError) {
+        debug.error = {
+          message: getUserError?.message,
+          type: getUserError?.constructor?.name,
+          statusCode: getUserError?.statusCode,
+        }
+        res.status(404).json({ success: false, debug })
+      }
+    } catch (clerkError) {
+      debug.error = {
+        message: clerkError?.message,
+        type: clerkError?.constructor?.name,
+      }
+      res.status(500).json({ success: false, debug })
+    }
+  } catch (error) {
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error',
+      details: error.message 
+    })
+  }
+})
+
+/**
  * GET /api/login-for-other/test-clerk
  * Test endpoint to verify Clerk connection and list all users
  */
