@@ -103,13 +103,23 @@ async function sendOTPEmail(email, otp) {
       // Fall through to Resend or console log
     }
   } else {
-    console.log('[OTP EMAIL] ⚠️  EmailJS not configured - missing credentials')
+    console.log('[OTP EMAIL] ⚠️  EmailJS not configured - missing credentials:', {
+      hasServiceId: !!emailjsServiceId,
+      hasTemplateId: !!emailjsTemplateId,
+      hasPublicKey: !!emailjsPublicKey,
+      serviceIdValue: emailjsServiceId ? emailjsServiceId.substring(0, 10) + '...' : 'missing',
+      templateIdValue: emailjsTemplateId ? emailjsTemplateId.substring(0, 10) + '...' : 'missing',
+      publicKeyValue: emailjsPublicKey ? emailjsPublicKey.substring(0, 10) + '...' : 'missing',
+    })
   }
 
-  // Fallback to Resend if EmailJS not configured
-  const resendApiKey = process.env.RESEND_API_KEY
-  
-  if (resendApiKey && !resendApiKey.includes('xxxxxxxx') && resendApiKey !== 're_xxxxxxxxxxxxxxxxxxxxx') {
+  // Fallback to Resend ONLY if EmailJS is not configured
+  // (Don't try Resend if EmailJS credentials exist but failed)
+  if (!emailjsServiceId || !emailjsTemplateId || !emailjsPublicKey) {
+    console.log('[OTP EMAIL] EmailJS not fully configured, trying Resend fallback...')
+    const resendApiKey = process.env.RESEND_API_KEY
+    
+    if (resendApiKey && !resendApiKey.includes('xxxxxxxx') && resendApiKey !== 're_xxxxxxxxxxxxxxxxxxxxx') {
     try {
       const { Resend } = await import('resend')
       const resend = new Resend(resendApiKey)
@@ -148,6 +158,9 @@ async function sendOTPEmail(email, otp) {
       console.error('[OTP EMAIL] Resend error:', error)
       // Fall through to console log
     }
+    }
+  } else {
+    console.log('[OTP EMAIL] Skipping Resend - EmailJS is configured (even if it failed)')
   }
 
   // If both fail, log to console (for development/testing)
