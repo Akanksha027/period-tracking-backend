@@ -296,8 +296,9 @@ Average Period Length: ${dbUserWithData.settings?.periodDuration || dbUserWithDa
     }
 
     const genAI = getGeminiClient()
-    const model = genAI.getGenerativeModel({ model: 'gemini-pro' })
-
+    // Try multiple models in order of preference (same as chat route)
+    const modelNames = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-flash-latest', 'gemini-pro-latest']
+    
     const prompt = `You are a supportive and caring period health assistant. Generate a personalized reminder message for a user based on their cycle phase and today's mood/symptoms.
 
 ${context}
@@ -316,9 +317,27 @@ The message should be:
 
 Generate ONLY the reminder message, no additional text or explanations.`
 
-    const result = await model.generateContent(prompt)
-    const response = await result.response
-    const reminderText = response.text().trim()
+    let reminderText = null
+    let lastError = null
+    
+    for (const modelName of modelNames) {
+      try {
+        const model = genAI.getGenerativeModel({ model: modelName })
+        const result = await model.generateContent(prompt)
+        const response = await result.response
+        reminderText = response.text().trim()
+        console.log(`[Reminder] Successfully generated reminder using model: ${modelName}`)
+        break
+      } catch (error) {
+        lastError = error
+        console.log(`[Reminder] Model ${modelName} failed: ${error.message}, trying next...`)
+        continue
+      }
+    }
+    
+    if (!reminderText) {
+      throw new Error(`All Gemini models failed. Please verify your API key has access to Generative Language API. Last error: ${lastError?.message || 'Unknown error'}`)
+    }
 
     // Save reminder to database (optional - for tracking)
     const reminder = await prisma.reminder.create({
@@ -550,7 +569,26 @@ router.get('/test', async (req, res) => {
     }
 
     const genAI = getGeminiClient()
-    const model = genAI.getGenerativeModel({ model: 'gemini-pro' })
+    // Try multiple models in order of preference (fastest first)
+    const modelNames = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+    let model = null
+    let lastError = null
+    
+    for (const modelName of modelNames) {
+      try {
+        model = genAI.getGenerativeModel({ model: modelName })
+        // Test if model works by generating a simple response
+        break
+      } catch (error) {
+        lastError = error
+        console.log(`[Reminder] Model ${modelName} failed, trying next...`)
+        continue
+      }
+    }
+    
+    if (!model) {
+      throw new Error(`All Gemini models failed. Please verify your API key. Last error: ${lastError?.message}`)
+    }
 
     const userName = dbUser.name || email.split('@')[0]
     const todaySymptoms = symptoms.map(s => s.type).join(', ') || 'none'

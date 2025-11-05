@@ -132,8 +132,9 @@ Average Period Length: ${settings?.periodDuration || settings?.averagePeriodLeng
     }
 
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
-    const model = genAI.getGenerativeModel({ model: 'gemini-pro' })
-
+    // Try multiple models in order of preference (same as chat route)
+    const modelNames = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-flash-latest', 'gemini-pro-latest']
+    
     const prompt = `You are a supportive and caring period health assistant. Generate a personalized reminder message for a user based on their cycle phase and today's mood/symptoms.
 
 ${context}
@@ -152,9 +153,27 @@ The message should be:
 
 Generate ONLY the reminder message, no additional text or explanations.`
 
-    const result = await model.generateContent(prompt)
-    const response = await result.response
-    const reminderText = response.text().trim()
+    let reminderText = null
+    let lastError = null
+    
+    for (const modelName of modelNames) {
+      try {
+        const model = genAI.getGenerativeModel({ model: modelName })
+        const result = await model.generateContent(prompt)
+        const response = await result.response
+        reminderText = response.text().trim()
+        console.log(`[Reminder Job] Successfully generated reminder using model: ${modelName}`)
+        break
+      } catch (error) {
+        lastError = error
+        console.log(`[Reminder Job] Model ${modelName} failed: ${error.message}, trying next...`)
+        continue
+      }
+    }
+    
+    if (!reminderText) {
+      throw new Error(`All Gemini models failed. Please verify your API key has access to Generative Language API. Last error: ${lastError?.message || 'Unknown error'}`)
+    }
 
     // Save reminder
     const reminder = await prisma.reminder.create({
