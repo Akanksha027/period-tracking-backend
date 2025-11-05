@@ -67,8 +67,8 @@ async function verifyClerkAuth(req, res, next) {
       console.log('[Auth] Token decode failed, trying alternative method:', tokenError.message)
     }
 
-    // Fallback: Try to get user from request body (email or clerkId)
-    const { clerkId, email } = req.body
+    // Fallback: Try to get user from request body or query params (email or clerkId)
+    const { clerkId, email } = { ...req.body, ...req.query }
 
     if (clerkId) {
       try {
