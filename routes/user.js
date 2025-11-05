@@ -21,72 +21,80 @@ async function verifyClerkAuth(req, res, next) {
       return res.status(401).json({ error: 'Missing token' })
     }
 
-    // For now, we'll accept Clerk user ID or email from the request
-    // The frontend should send the Clerk session token in the Authorization header
-    // We'll extract user info from the request body or use a simpler approach
-    // TODO: Properly verify Clerk session token
-    
-    // For now, allow the request to pass with user info in body
-    // The frontend should send clerkId or email in the request
+    // Try to get user from token first (decode JWT to get user ID)
+    try {
+      const jwt = require('jsonwebtoken')
+      const decoded = jwt.decode(token, { complete: true })
+      
+      if (decoded && decoded.payload && decoded.payload.sub) {
+        // Token contains user ID in 'sub' claim
+        const userId = decoded.payload.sub
+        const clerkUser = await clerk.users.getUser(userId)
+        
+        req.user = {
+          id: clerkUser.id,
+          email: clerkUser.emailAddresses[0]?.emailAddress,
+          firstName: clerkUser.firstName,
+          lastName: clerkUser.lastName,
+          clerkId: clerkUser.id,
+        }
+        return next()
+      }
+    } catch (tokenError) {
+      console.log('[Auth] Token decode failed, trying alternative method:', tokenError.message)
+    }
+
+    // Fallback: Try to get user from request body (email or clerkId)
     const { clerkId, email } = req.body
 
-    if (!clerkId && !email) {
-      // Try to get user from token if available
+    if (clerkId) {
       try {
-        // Basic token verification - get user ID from token
-        // Clerk tokens are JWT, we can decode the sub claim
-        const jwt = require('jsonwebtoken')
-        const decoded = jwt.decode(token)
-        
-        if (decoded && decoded.sub) {
-          const clerkUser = await clerk.users.getUser(decoded.sub)
-          req.user = {
-            id: clerkUser.id,
-            email: clerkUser.emailAddresses[0]?.emailAddress,
-            firstName: clerkUser.firstName,
-            lastName: clerkUser.lastName,
-            clerkId: clerkUser.id,
+        const clerkUser = await clerk.users.getUser(clerkId)
+        req.user = {
+          id: clerkUser.id,
+          email: clerkUser.emailAddresses[0]?.emailAddress,
+          firstName: clerkUser.firstName,
+          lastName: clerkUser.lastName,
+          clerkId: clerkUser.id,
+        }
+        return next()
+      } catch (error) {
+        console.error('[Auth] Error getting user by clerkId:', error)
+      }
+    }
+
+    if (email) {
+      try {
+        // Find user by email
+        const users = await clerk.users.getUserList({ limit: 500 })
+        const userArray = Array.isArray(users) ? users : (users.data || [])
+        for (const user of userArray.slice(0, 100)) { // Limit to first 100
+          try {
+            const fullUser = await clerk.users.getUser(user.id)
+            if (fullUser.emailAddresses?.some(e => e.emailAddress === email)) {
+              req.user = {
+                id: fullUser.id,
+                email: fullUser.emailAddresses[0]?.emailAddress,
+                firstName: fullUser.firstName,
+                lastName: fullUser.lastName,
+                clerkId: fullUser.id,
+              }
+              return next()
+            }
+          } catch (userError) {
+            continue
           }
-          return next()
         }
       } catch (error) {
-        // Continue to alternative method
-      }
-      
-      return res.status(401).json({ error: 'Missing user identification' })
-    }
-
-    // Get user from Clerk
-    let clerkUser
-    if (clerkId) {
-      clerkUser = await clerk.users.getUser(clerkId)
-    } else if (email) {
-      // Find user by email
-      const users = await clerk.users.getUserList({ limit: 500 })
-      const userArray = Array.isArray(users) ? users : (users.data || [])
-      for (const user of userArray) {
-        const fullUser = await clerk.users.getUser(user.id)
-        if (fullUser.emailAddresses?.some(e => e.emailAddress === email)) {
-          clerkUser = fullUser
-          break
-        }
+        console.error('[Auth] Error finding user by email:', error)
       }
     }
 
-    if (!clerkUser) {
-      return res.status(401).json({ error: 'User not found' })
-    }
-
-    // Attach user to request object
-    req.user = {
-      id: clerkUser.id,
-      email: clerkUser.emailAddresses[0]?.emailAddress,
-      firstName: clerkUser.firstName,
-      lastName: clerkUser.lastName,
-      clerkId: clerkUser.id,
-    }
-
-    next()
+    // If all methods failed
+    return res.status(401).json({ 
+      error: 'Authentication failed', 
+      details: 'Could not verify user identity. Please ensure you are logged in.',
+    })
   } catch (error) {
     console.error('[Auth] Error verifying Clerk token:', error)
     return res.status(401).json({ error: 'Authentication failed', details: error.message })
