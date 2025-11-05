@@ -63,13 +63,33 @@ async function sendOTPEmail(email, otp) {
  */
 async function findUserByEmail(email) {
   try {
+    // Log original email to detect corruption
+    console.log('[Login For Other] ===== START findUserByEmail =====')
+    console.log('[Login For Other] Original email received:', email)
+    console.log('[Login For Other] Email type:', typeof email)
+    console.log('[Login For Other] Email length:', email?.length)
+    
     const normalizedEmail = email.toLowerCase().trim()
-    console.log('[Login For Other] Finding user by email in Clerk:', normalizedEmail)
+    console.log('[Login For Other] Normalized email:', normalizedEmail)
+    console.log('[Login For Other] Normalized email length:', normalizedEmail.length)
+    console.log('[Login For Other] Normalized email bytes:', Buffer.from(normalizedEmail).toString('hex'))
+    
+    // Verify email format
+    if (!normalizedEmail.includes('@')) {
+      console.error('[Login For Other] ERROR: Invalid email format - no @ symbol')
+      return null
+    }
+    
+    if (!normalizedEmail.includes('.com') && !normalizedEmail.includes('.net') && !normalizedEmail.includes('.org')) {
+      console.warn('[Login For Other] WARNING: Unusual email domain format')
+    }
 
     // First, try to find user in our database (Prisma) for faster lookup
+    console.log('[Login For Other] Searching in database for email:', normalizedEmail)
     const dbUser = await prisma.user.findUnique({
       where: { email: normalizedEmail },
     })
+    console.log('[Login For Other] Database lookup result:', dbUser ? `Found user ${dbUser.id}` : 'Not found in database')
 
         // Search for user in Clerk by email
     try {
@@ -78,29 +98,60 @@ async function findUserByEmail(email) {
       
       // Approach 1: Try with emailAddress filter (might not work in all Clerk versions)
       let users = null
+      console.log('[Login For Other] Attempting Clerk API call with emailAddress filter')
+      console.log('[Login For Other] Filter email being used:', normalizedEmail)
       try {
-        users = await clerk.users.getUserList({
+        const clerkRequest = {
           emailAddress: [normalizedEmail],
           limit: 1,
-        })
-        console.log('[Login For Other] Clerk API response (with emailAddress filter):', JSON.stringify({
+        }
+        console.log('[Login For Other] Clerk request params:', JSON.stringify(clerkRequest, null, 2))
+        
+        users = await clerk.users.getUserList(clerkRequest)
+        
+        console.log('[Login For Other] Clerk API response received')
+        console.log('[Login For Other] Response type:', typeof users)
+        console.log('[Login For Other] Response keys:', users ? Object.keys(users) : 'null')
+        
+        const summary = {
           hasData: !!users?.data,
           dataLength: users?.data?.length || 0,
           totalCount: users?.totalCount || 0,
-          firstUserEmail: users?.data?.[0]?.emailAddresses?.[0]?.emailAddress || 'none',
-        }, null, 2))
+          hasMore: users?.hasMore || false,
+        }
+        
+        if (users?.data?.length > 0) {
+          const firstUser = users.data[0]
+          summary.firstUserId = firstUser.id
+          summary.firstUserEmails = firstUser.emailAddresses?.map(e => e.emailAddress) || []
+          summary.firstUserEmail = firstUser.emailAddresses?.[0]?.emailAddress || 'none'
+        }
+        
+        console.log('[Login For Other] Clerk API response summary:', JSON.stringify(summary, null, 2))
         
         // Also log the raw response (truncated if too long)
         if (users) {
-          const responseStr = JSON.stringify(users, null, 2)
-          if (responseStr.length > 1000) {
-            console.log('[Login For Other] Full Clerk response (first 1000 chars):', responseStr.substring(0, 1000))
-          } else {
-            console.log('[Login For Other] Full Clerk response:', responseStr)
+          try {
+            const responseStr = JSON.stringify(users, null, 2)
+            if (responseStr.length > 2000) {
+              console.log('[Login For Other] Full Clerk response (first 2000 chars):', responseStr.substring(0, 2000))
+              console.log('[Login For Other] Full Clerk response (last 500 chars):', responseStr.substring(responseStr.length - 500))
+            } else {
+              console.log('[Login For Other] Full Clerk response:', responseStr)
+            }
+          } catch (jsonError) {
+            console.error('[Login For Other] Error stringifying Clerk response:', jsonError)
+            console.log('[Login For Other] Clerk response (raw):', users)
           }
+        } else {
+          console.log('[Login For Other] Clerk API returned null or undefined')
         }
       } catch (filterError) {
-        console.log('[Login For Other] EmailAddress filter failed, trying without filter:', filterError.message)
+        console.error('[Login For Other] Clerk API call failed with error')
+        console.error('[Login For Other] Error type:', filterError?.constructor?.name || typeof filterError)
+        console.error('[Login For Other] Error message:', filterError?.message)
+        console.error('[Login For Other] Error stack:', filterError?.stack)
+        console.log('[Login For Other] EmailAddress filter failed, trying without filter')
         users = null
       }
 
@@ -134,6 +185,7 @@ async function findUserByEmail(email) {
           }
         }
 
+        console.log('[Login For Other] ===== END findUserByEmail - USER FOUND (emailAddress filter) =====')
         return {
           id: clerkUser.id,
           email: userEmail,
@@ -191,6 +243,7 @@ async function findUserByEmail(email) {
               }
             }
 
+            console.log('[Login For Other] ===== END findUserByEmail - USER FOUND (manual search) =====')
             return {
               id: matchedUser.id,
               email: userEmail,
@@ -209,18 +262,37 @@ async function findUserByEmail(email) {
       }
 
       console.log('[Login For Other] User not found in Clerk for email:', normalizedEmail)
+      console.log('[Login For Other] ===== END findUserByEmail - USER NOT FOUND =====')
       return null
     } catch (clerkError) {
+      console.error('[Login For Other] ===== ERROR in Clerk search =====')
       console.error('[Login For Other] Error searching Clerk:', clerkError)
-      console.error('[Login For Other] Error details:', {
-        message: clerkError.message,
-        stack: clerkError.stack,
-      })
+      console.error('[Login For Other] Error type:', clerkError?.constructor?.name || typeof clerkError)
+      console.error('[Login For Other] Error message:', clerkError?.message)
+      console.error('[Login For Other] Error stack:', clerkError?.stack)
+      
+      // Check if Clerk client is properly initialized
+      try {
+        const clerkCheck = clerk
+        console.log('[Login For Other] Clerk client check:', {
+          isDefined: typeof clerkCheck !== 'undefined',
+          hasUsers: typeof clerkCheck?.users !== 'undefined',
+          hasGetUserList: typeof clerkCheck?.users?.getUserList === 'function',
+        })
+      } catch (checkError) {
+        console.error('[Login For Other] Error checking Clerk client:', checkError)
+      }
+      
+      console.log('[Login For Other] ===== END findUserByEmail - ERROR =====')
       return null
     }
   } catch (error) {
+    console.error('[Login For Other] ===== FATAL ERROR in findUserByEmail =====')
     console.error('[Login For Other] Error finding user:', error)
-    console.error('[Login For Other] Error stack:', error.stack)
+    console.error('[Login For Other] Error type:', error?.constructor?.name || typeof error)
+    console.error('[Login For Other] Error message:', error?.message)
+    console.error('[Login For Other] Error stack:', error?.stack)
+    console.log('[Login For Other] ===== END findUserByEmail - FATAL ERROR =====')
     return null
   }
 }
