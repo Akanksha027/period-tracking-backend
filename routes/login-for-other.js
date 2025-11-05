@@ -320,11 +320,39 @@ router.get('/test-clerk', async (req, res) => {
 
       debug.clerkAvailable = true
 
-      // Get all users
-      const users = await clerk.users.getUserList({ limit: 100 })
+      // Check Clerk environment
+      debug.clerkEnv = {
+        hasSecretKey: !!process.env.CLERK_SECRET_KEY,
+        secretKeyPrefix: process.env.CLERK_SECRET_KEY ? process.env.CLERK_SECRET_KEY.substring(0, 10) + '...' : 'MISSING',
+        secretKeyType: process.env.CLERK_SECRET_KEY ? (process.env.CLERK_SECRET_KEY.startsWith('sk_test_') ? 'TEST' : process.env.CLERK_SECRET_KEY.startsWith('sk_live_') ? 'LIVE' : 'UNKNOWN') : 'NONE',
+      }
+
+      // Get all users with detailed error handling
+      let users = null
+      try {
+        users = await clerk.users.getUserList({ limit: 100 })
+        debug.apiCall = {
+          success: true,
+          responseType: typeof users,
+          hasData: !!users?.data,
+          dataType: Array.isArray(users?.data) ? 'array' : typeof users?.data,
+          totalCount: users?.totalCount,
+          hasMore: users?.hasMore,
+        }
+      } catch (apiError) {
+        debug.apiCall = {
+          success: false,
+          error: apiError.message,
+          errorType: apiError.constructor.name,
+          statusCode: apiError.statusCode,
+          statusText: apiError.statusText,
+        }
+        throw apiError
+      }
+
       debug.usersFound = users?.data?.length || 0
       
-      if (users?.data) {
+      if (users?.data && users.data.length > 0) {
         // Extract all emails
         users.data.forEach(user => {
           if (user.emailAddresses && user.emailAddresses.length > 0) {
@@ -343,6 +371,8 @@ router.get('/test-clerk', async (req, res) => {
           firstName: user.firstName,
           lastName: user.lastName,
         }))
+      } else {
+        debug.warning = 'Clerk API call succeeded but returned no users. This might mean: 1) The CLERK_SECRET_KEY is for a different Clerk instance, 2) There are no users in this instance, 3) The API key lacks permissions.'
       }
 
       res.json({ success: true, debug })
