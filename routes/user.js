@@ -1,6 +1,7 @@
 import express from 'express'
 import { clerk } from '../lib/clerk.js'
 import prisma from '../lib/prisma.js'
+import jwt from 'jsonwebtoken'
 
 const router = express.Router()
 
@@ -23,8 +24,6 @@ async function verifyClerkAuth(req, res, next) {
 
     // Try to get user from token first (decode JWT to get user ID)
     try {
-      const jwt = require('jsonwebtoken')
-      
       // Try decoding with complete first
       let decoded = jwt.decode(token, { complete: true })
       let userId = null
