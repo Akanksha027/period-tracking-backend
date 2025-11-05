@@ -33,82 +33,97 @@ function generateOTP() {
 }
 
 /**
- * Send OTP email using Resend
- * For testing: Use Resend's free tier (100 emails/day)
- * Get API key from: https://resend.com/api-keys
+ * Send OTP email using EmailJS (free, no domain required)
+ * Get credentials from: https://www.emailjs.com/
  */
 async function sendOTPEmail(email, otp) {
+  const emailjsServiceId = process.env.EMAILJS_SERVICE_ID
+  const emailjsTemplateId = process.env.EMAILJS_TEMPLATE_ID
+  const emailjsPublicKey = process.env.EMAILJS_PUBLIC_KEY
+
+  // Try EmailJS first (no domain required)
+  if (emailjsServiceId && emailjsTemplateId && emailjsPublicKey) {
+    try {
+      const emailjs = await import('@emailjs/nodejs')
+      
+      const result = await emailjs.send(
+        emailjsServiceId,
+        emailjsTemplateId,
+        {
+          to_email: email,
+          otp_code: otp,
+          message: `Your verification code is: ${otp}. This code expires in 10 minutes.`,
+        },
+        {
+          publicKey: emailjsPublicKey,
+        }
+      )
+
+      console.log('[OTP EMAIL] ✅ Sent successfully via EmailJS:', result)
+      return
+    } catch (error) {
+      console.error('[OTP EMAIL] EmailJS error:', error)
+      // Fall through to Resend or console log
+    }
+  }
+
+  // Fallback to Resend if EmailJS not configured
   const resendApiKey = process.env.RESEND_API_KEY
   
-  // Check if Resend is configured with a real API key
-  if (!resendApiKey || resendApiKey.includes('xxxxxxxx') || resendApiKey === 're_xxxxxxxxxxxxxxxxxxxxx') {
-    console.log('='.repeat(80))
-    console.log('[OTP EMAIL - NOT SENT - RESEND_API_KEY not configured or is placeholder]')
-    console.log(`To: ${email}`)
-    console.log(`Subject: Login Verification Code - Period Tracker`)
-    console.log(`Your verification code is: ${otp}`)
-    console.log(`This code expires in 10 minutes.`)
-    console.log('='.repeat(80))
-    console.log('⚠️  To enable email sending:')
-    console.log('   1. Go to https://resend.com and sign up (free tier: 100 emails/day)')
-    console.log('   2. Go to https://resend.com/api-keys and create a new API key')
-    console.log('   3. Copy the API key (starts with re_...)')
-    console.log('   4. Add it to Vercel environment variables as RESEND_API_KEY')
-    console.log('   5. Redeploy your application')
-    return
-  }
-
-  try {
-    const { Resend } = await import('resend')
-    const resend = new Resend(resendApiKey)
-
-    const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev'
-    
-    const result = await resend.emails.send({
-      from: fromEmail,
-      to: email,
-      subject: 'Login Verification Code - Period Tracker',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #333;">Login Verification Code</h2>
-          <p>Your verification code for "Login for Someone Else" is:</p>
-          <div style="background-color: #f4f4f4; padding: 20px; text-align: center; margin: 20px 0; border-radius: 5px;">
-            <h1 style="color: #0066cc; font-size: 32px; margin: 0; letter-spacing: 5px;">${otp}</h1>
-          </div>
-          <p style="color: #666; font-size: 14px;">This code expires in 10 minutes.</p>
-          <p style="color: #666; font-size: 14px;">If you didn't request this code, please ignore this email.</p>
-        </div>
-      `,
-      text: `Your verification code is: ${otp}\n\nThis code expires in 10 minutes.\n\nIf you didn't request this, please ignore this email.`,
-    })
-
-    console.log('[OTP EMAIL] Resend API response:', result)
-    
-    // Check if there was an error in the response
-    if (result.error) {
-      console.error('[OTP EMAIL] Resend API error:', result.error)
+  if (resendApiKey && !resendApiKey.includes('xxxxxxxx') && resendApiKey !== 're_xxxxxxxxxxxxxxxxxxxxx') {
+    try {
+      const { Resend } = await import('resend')
+      const resend = new Resend(resendApiKey)
+      const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev'
       
-      // If it's a domain verification error, provide helpful message
-      if (result.error.statusCode === 403 && result.error.message?.includes('verify a domain')) {
-        console.error('[OTP EMAIL] ⚠️  Domain verification required:')
-        console.error('   Resend free tier only allows sending to your verified email.')
-        console.error('   To send to any email, verify a domain at: https://resend.com/domains')
-        console.error('   Then update RESEND_FROM_EMAIL to use your verified domain.')
-        // Don't throw - OTP is still generated, just not sent via email
-        return
+      const result = await resend.emails.send({
+        from: fromEmail,
+        to: email,
+        subject: 'Login Verification Code - Period Tracker',
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #333;">Login Verification Code</h2>
+            <p>Your verification code for "Login for Someone Else" is:</p>
+            <div style="background-color: #f4f4f4; padding: 20px; text-align: center; margin: 20px 0; border-radius: 5px;">
+              <h1 style="color: #0066cc; font-size: 32px; margin: 0; letter-spacing: 5px;">${otp}</h1>
+            </div>
+            <p style="color: #666; font-size: 14px;">This code expires in 10 minutes.</p>
+            <p style="color: #666; font-size: 14px;">If you didn't request this code, please ignore this email.</p>
+          </div>
+        `,
+        text: `Your verification code is: ${otp}\n\nThis code expires in 10 minutes.\n\nIf you didn't request this, please ignore this email.`,
+      })
+
+      if (result.error) {
+        if (result.error.statusCode === 403) {
+          console.error('[OTP EMAIL] ⚠️  Resend requires domain verification')
+        }
+        throw new Error(`Resend API error: ${result.error.message}`)
       }
       
-      throw new Error(`Resend API error: ${result.error.message}`)
+      if (result.data) {
+        console.log('[OTP EMAIL] ✅ Sent successfully via Resend. Email ID:', result.data.id)
+        return
+      }
+    } catch (error) {
+      console.error('[OTP EMAIL] Resend error:', error)
+      // Fall through to console log
     }
-    
-    if (result.data) {
-      console.log('[OTP EMAIL] ✅ Sent successfully via Resend. Email ID:', result.data.id)
-    }
-  } catch (error) {
-    console.error('[OTP EMAIL] Error sending via Resend:', error)
-    // Don't throw - OTP is still generated and stored, just not sent via email
-    // This allows the flow to continue even if email fails
   }
+
+  // If both fail, log to console (for development/testing)
+  console.log('='.repeat(80))
+  console.log('[OTP EMAIL - NOT SENT - Email service not configured]')
+  console.log(`To: ${email}`)
+  console.log(`Subject: Login Verification Code - Period Tracker`)
+  console.log(`Your verification code is: ${otp}`)
+  console.log(`This code expires in 10 minutes.`)
+  console.log('='.repeat(80))
+  console.log('⚠️  To enable email sending, configure EmailJS (recommended - no domain needed):')
+  console.log('   1. Go to https://www.emailjs.com/ and sign up (free)')
+  console.log('   2. Create an email service (Gmail works)')
+  console.log('   3. Create an email template')
+  console.log('   4. Add to Vercel: EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, EMAILJS_PUBLIC_KEY')
 }
 
 /**
