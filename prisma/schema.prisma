@@ -18,9 +18,19 @@ model User {
   supabaseId    String?        @unique @map("supabase_id") // Supabase Auth user ID (legacy)
   clerkId       String?        @unique @map("clerk_id") // Clerk user ID
   name          String?
+  
+  // User type: 'self' = primary user who manages their data, 'other' = viewer
+  userType      UserType       @default(SELF) @map("user_type")
+  
+  // For 'other' users: link to the 'self' user they're viewing
+  viewedUserId  String?        @map("viewed_user_id") // ID of the 'self' user this 'other' user is viewing
+  viewedUser    User?          @relation("UserViewer", fields: [viewedUserId], references: [id], onDelete: Cascade)
+  viewers       User[]         @relation("UserViewer") // Reverse relation: all 'other' users viewing this 'self' user
+  
   createdAt     DateTime       @default(now()) @map("created_at")
   updatedAt     DateTime       @updatedAt @map("updated_at")
   
+  // Data relationships - 'self' users own data, 'other' users view 'self' user's data
   periods       Period[]
   symptoms      Symptom[]
   moods         Mood[]
@@ -28,7 +38,15 @@ model User {
   settings      UserSettings?
   otpCodes      OtpCode[]
   
+  @@index([userType])
+  @@index([viewedUserId])
   @@map("users")
+}
+
+// User type enum
+enum UserType {
+  SELF  // Primary user who manages their period data
+  OTHER // Viewer who can only view a 'self' user's data
 }
 
 // User Settings
@@ -37,8 +55,14 @@ model UserSettings {
   userId                String    @unique @map("user_id")
   user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   
-  averageCycleLength    Int       @default(28) @map("average_cycle_length")
-  averagePeriodLength   Int       @default(5) @map("average_period_length")
+  // Initial setup data (for 'self' users)
+  lastPeriodDate        DateTime? @map("last_period_date") // Last period start date
+  periodDuration        Int?      @default(5) @map("period_duration") // How long periods last (days)
+  averageCycleLength    Int       @default(28) @map("average_cycle_length") // Average cycle length (days)
+  birthYear             Int?      @map("birth_year") // Birth year for age-related features
+  
+  // Settings
+  averagePeriodLength   Int       @default(5) @map("average_period_length") // Alias for periodDuration (for backward compatibility)
   reminderEnabled       Boolean   @default(true) @map("reminder_enabled")
   reminderDaysBefore    Int       @default(3) @map("reminder_days_before")
   

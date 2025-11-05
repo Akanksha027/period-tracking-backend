@@ -817,49 +817,65 @@ router.post('/verify-credentials', async (req, res) => {
       }
     }
 
-    // Check if user was found
+    // Check if user was found in Clerk
     if (users && users.data && users.data.length > 0) {
       const clerkUser = users.data[0]
       const userEmail = clerkUser.emailAddresses?.[0]?.emailAddress || normalizedEmail
 
-      debug.finalResult = 'USER_FOUND'
-      
-      // Sync to database if needed
+      // CRITICAL: Check if this user exists in our database as a 'SELF' user
+      // Only 'SELF' users can be viewed by 'OTHER' users
       try {
-        const existingUser = await prisma.user.findUnique({
-          where: { email: normalizedEmail },
+        const selfUser = await prisma.user.findFirst({
+          where: {
+            email: normalizedEmail,
+            userType: 'SELF', // Must be a SELF user
+          },
         })
 
-        if (!existingUser) {
-          await prisma.user.create({
-            data: {
-              email: normalizedEmail,
-              clerkId: clerkUser.id,
-              name: clerkUser.firstName || clerkUser.lastName
-                ? `${clerkUser.firstName || ''} ${clerkUser.lastName || ''}`.trim()
-                : null,
-            },
+        debug.selfUserCheck = {
+          found: !!selfUser,
+          userId: selfUser?.id,
+          userType: selfUser?.userType,
+        }
+
+        if (!selfUser) {
+          // User exists in Clerk but not in our database as 'SELF' user
+          // This means they haven't created a "Login for Yourself" account yet
+          debug.finalResult = 'USER_NOT_SELF_USER'
+          return res.status(404).json({
+            success: false,
+            error: 'No account found with this email address. The person must create an account first using "Login for Yourself".',
+            debug,
           })
         }
-      } catch (syncError) {
-        debug.syncError = syncError.message
-      }
 
-      return res.json({
-        success: true,
-        message: 'User found and ready for verification',
-        email: normalizedEmail,
-        userId: clerkUser.id,
-        debug, // Include debug info in response
-      })
+        // User exists as 'SELF' - ready for OTP verification
+        debug.finalResult = 'SELF_USER_FOUND'
+        return res.json({
+          success: true,
+          message: 'User found and ready for verification',
+          email: normalizedEmail,
+          userId: selfUser.id,
+          clerkId: clerkUser.id,
+          debug,
+        })
+      } catch (dbError) {
+        debug.dbError = dbError.message
+        debug.finalResult = 'DB_ERROR'
+        return res.status(500).json({
+          success: false,
+          error: 'Database error while checking user',
+          debug,
+        })
+      }
     }
 
-    // User not found
-    debug.finalResult = 'USER_NOT_FOUND'
+    // User not found in Clerk
+    debug.finalResult = 'USER_NOT_FOUND_IN_CLERK'
     return res.status(404).json({
       success: false,
-      error: 'No account found with this email address',
-      debug, // Include debug info in 404 response
+      error: 'No account found with this email address. The person must create an account first using "Login for Yourself".',
+      debug,
     })
   } catch (error) {
     debug.finalResult = 'ERROR'
@@ -922,34 +938,28 @@ router.post('/send-otp', async (req, res) => {
       return res.status(400).json({ error: 'Email is required' })
     }
 
-    // Check if user exists in Supabase Auth
-    const user = await findUserByEmail(email)
+    const normalizedEmail = email.toLowerCase().trim()
 
-    if (!user) {
+    // CRITICAL: Find the SELF user (the person whose data will be viewed)
+    // Only SELF users can be viewed by OTHER users
+    const selfUser = await prisma.user.findFirst({
+      where: {
+        email: normalizedEmail,
+        userType: 'SELF', // Must be a SELF user
+      },
+    })
+
+    if (!selfUser) {
       return res.status(404).json({
-        error: 'No account found with this email address',
+        error: 'No account found with this email address. The person must create an account first using "Login for Yourself".',
       })
     }
 
-    // Find or create user in database
-    let dbUser = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() },
-    })
-
-    if (!dbUser) {
-      dbUser = await prisma.user.create({
-        data: {
-          email: user.email,
-          clerkId: user.clerkId || user.id,
-        },
-      })
-    } else if (!dbUser.clerkId && (user.clerkId || user.id)) {
-      // Update existing user with Clerk ID if missing
-      dbUser = await prisma.user.update({
-        where: { id: dbUser.id },
-        data: {
-          clerkId: user.clerkId || user.id,
-        },
+    // Verify user exists in Clerk (for email sending)
+    const clerkUser = await clerk.users.getUser(selfUser.clerkId)
+    if (!clerkUser) {
+      return res.status(404).json({
+        error: 'User account not found in authentication system',
       })
     }
 
@@ -965,20 +975,20 @@ router.post('/send-otp', async (req, res) => {
       },
     })
 
-    // Store OTP in database
+    // Store OTP in database - linked to the SELF user
     await prisma.otpCode.create({
       data: {
-        email: email.toLowerCase(),
-        userId: dbUser.id,
+        email: normalizedEmail, // SELF user's email
+        userId: selfUser.id, // SELF user's ID
         otp,
         expiresAt,
         verified: false,
       },
     })
 
-    // Send OTP via email
+    // Send OTP via email to the SELF user's email
     try {
-      await sendOTPEmail(user.email, otp)
+      await sendOTPEmail(selfUser.email, otp)
     } catch (emailError) {
       console.error('[Login For Other] Email sending error:', emailError)
       // Continue anyway - OTP is still created
@@ -1075,16 +1085,27 @@ router.post('/verify-otp', async (req, res) => {
       })
     }
 
-    // Get user information from Clerk
-    const dbUser = otpData.user
-    if (!dbUser || !dbUser.clerkId) {
+    // Get the SELF user (the person whose data will be viewed)
+    const selfUser = otpData.user
+    if (!selfUser) {
       return res.status(404).json({ error: 'User not found in database' })
     }
 
-    // Get user from Clerk
+    // Verify this is a SELF user
+    if (selfUser.userType !== 'SELF') {
+      return res.status(400).json({ 
+        error: 'Invalid account type. Only "Login for Yourself" accounts can be viewed.',
+      })
+    }
+
+    if (!selfUser.clerkId) {
+      return res.status(404).json({ error: 'User account incomplete' })
+    }
+
+    // Get user from Clerk for email verification
     let clerkUser
     try {
-      clerkUser = await clerk.users.getUser(dbUser.clerkId)
+      clerkUser = await clerk.users.getUser(selfUser.clerkId)
     } catch (userError) {
       console.error('[Login For Other] Error getting user from Clerk:', userError)
       return res.status(404).json({ error: 'User not found in Clerk' })
@@ -1092,12 +1113,6 @@ router.post('/verify-otp', async (req, res) => {
 
     if (!clerkUser) {
       return res.status(404).json({ error: 'User not found' })
-    }
-
-    const user = {
-      id: clerkUser.id,
-      email: clerkUser.emailAddresses[0]?.emailAddress || dbUser.email,
-      created_at: clerkUser.createdAt,
     }
 
     // Generate a temporary token
@@ -1125,19 +1140,17 @@ router.post('/verify-otp', async (req, res) => {
       },
     })
 
-    // For Clerk, we can't generate magic links from backend
-    // The frontend should handle Clerk authentication after OTP verification
-    // We'll return the tempToken which the frontend can use to complete the flow
+    // Return SELF user info and temp token for complete-login
     res.json({
       success: true,
       message: 'OTP verified successfully. You can now access the account.',
-      user: {
-        id: user.id,
-        email: user.email,
-        created_at: user.created_at,
-        clerkId: dbUser.clerkId,
+      selfUser: {
+        id: selfUser.id,
+        email: selfUser.email,
+        clerkId: selfUser.clerkId,
+        name: selfUser.name,
       },
-      tempToken, // Frontend can use this to complete login
+      tempToken, // Frontend will use this in complete-login to create OTHER user
       expiresAt: tokenExpiresAt,
     })
   } catch (error) {
@@ -1152,16 +1165,19 @@ router.post('/verify-otp', async (req, res) => {
  */
 router.post('/complete-login', async (req, res) => {
   try {
-    const { email, tempToken } = req.body
+    const { email, tempToken, viewerIdentifier } = req.body
+    // viewerIdentifier: optional identifier for the viewer (e.g., device ID, session ID, or viewer's email)
 
     if (!email || !tempToken) {
       return res.status(400).json({ error: 'Email and token are required' })
     }
 
+    const normalizedEmail = email.toLowerCase().trim()
+
     // Verify temporary token from database
     const otpData = await prisma.otpCode.findFirst({
       where: {
-        email: email.toLowerCase(),
+        email: normalizedEmail,
         tempToken,
         verified: true,
       },
@@ -1182,29 +1198,39 @@ router.post('/complete-login', async (req, res) => {
       return res.status(400).json({ error: 'Token has expired. Please verify OTP again.' })
     }
 
-    // Get user from Clerk
-    const dbUser = otpData.user
-    if (!dbUser || !dbUser.clerkId) {
-      return res.status(404).json({ error: 'User not found in database' })
+    // Get the SELF user (whose data will be viewed)
+    const selfUser = otpData.user
+    if (!selfUser || selfUser.userType !== 'SELF') {
+      return res.status(404).json({ error: 'Self user not found or invalid account type' })
     }
 
-    // Get user from Clerk
-    let clerkUser
-    try {
-      clerkUser = await clerk.users.getUser(dbUser.clerkId)
-    } catch (userError) {
-      return res.status(404).json({ error: 'User not found in Clerk' })
-    }
+    // Create or find the OTHER user (viewer)
+    // For now, we'll use a unique identifier or create a viewer account
+    // The viewerIdentifier can be a device ID, session ID, or viewer's email
+    const viewerEmail = viewerIdentifier 
+      ? `${normalizedEmail}.viewer.${viewerIdentifier}`.toLowerCase()
+      : `${normalizedEmail}.viewer.${Date.now()}`.toLowerCase()
 
-    if (!clerkUser) {
-      return res.status(404).json({ error: 'User not found' })
-    }
+    let otherUser = await prisma.user.findFirst({
+      where: {
+        viewedUserId: selfUser.id,
+        userType: 'OTHER',
+      },
+      // If viewerIdentifier provided, we could match by that
+      // For now, create a new viewer session each time
+    })
 
-    const user = {
-      id: clerkUser.id,
-      email: clerkUser.emailAddresses[0]?.emailAddress || dbUser.email,
-      created_at: clerkUser.createdAt,
-    }
+    // Create new OTHER user for this viewing session
+    // Note: Each viewer session creates a new OTHER user record
+    // In production, you might want to reuse existing OTHER users based on viewerIdentifier
+    otherUser = await prisma.user.create({
+      data: {
+        email: viewerEmail, // Unique email for this viewer
+        userType: 'OTHER',
+        viewedUserId: selfUser.id, // Link to the SELF user they're viewing
+        name: `Viewer for ${selfUser.email}`,
+      },
+    })
 
     // Clean up the OTP record
     await prisma.otpCode.delete({
@@ -1213,12 +1239,18 @@ router.post('/complete-login', async (req, res) => {
 
     res.json({
       success: true,
-      user: {
-        id: user.id,
-        email: user.email,
-        created_at: user.created_at,
+      message: 'Login completed successfully. You can now view the account data.',
+      viewer: {
+        id: otherUser.id,
+        userType: 'OTHER',
+        viewedUserId: selfUser.id,
+        viewedUserEmail: selfUser.email,
       },
-      // Client should use the login link from verify-otp response
+      selfUser: {
+        id: selfUser.id,
+        email: selfUser.email,
+        name: selfUser.name,
+      },
     })
   } catch (error) {
     console.error('[Login For Other] Complete login error:', error)
