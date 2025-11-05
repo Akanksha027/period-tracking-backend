@@ -298,46 +298,223 @@ async function findUserByEmail(email) {
 }
 
 /**
+ * GET /api/login-for-other/test-clerk
+ * Test endpoint to verify Clerk connection and list all users
+ */
+router.get('/test-clerk', async (req, res) => {
+  try {
+    const debug = {
+      clerkAvailable: false,
+      clerkError: null,
+      usersFound: 0,
+      sampleUsers: [],
+      allEmails: [],
+    }
+
+    try {
+      // Check if Clerk client is available
+      if (!clerk || !clerk.users) {
+        debug.clerkError = 'Clerk client not initialized'
+        return res.status(500).json({ success: false, debug })
+      }
+
+      debug.clerkAvailable = true
+
+      // Get all users
+      const users = await clerk.users.getUserList({ limit: 100 })
+      debug.usersFound = users?.data?.length || 0
+      
+      if (users?.data) {
+        // Extract all emails
+        users.data.forEach(user => {
+          if (user.emailAddresses && user.emailAddresses.length > 0) {
+            user.emailAddresses.forEach(emailObj => {
+              if (emailObj?.emailAddress) {
+                debug.allEmails.push(emailObj.emailAddress.toLowerCase().trim())
+              }
+            })
+          }
+        })
+
+        // Sample first 5 users
+        debug.sampleUsers = users.data.slice(0, 5).map(user => ({
+          id: user.id,
+          emails: user.emailAddresses?.map(e => e.emailAddress) || [],
+          firstName: user.firstName,
+          lastName: user.lastName,
+        }))
+      }
+
+      res.json({ success: true, debug })
+    } catch (clerkError) {
+      debug.clerkError = {
+        message: clerkError?.message,
+        type: clerkError?.constructor?.name,
+      }
+      res.status(500).json({ success: false, debug })
+    }
+  } catch (error) {
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error',
+      details: error.message 
+    })
+  }
+})
+
+/**
  * POST /api/login-for-other/verify-credentials
  * Verify email exists (password not required for "login for someone else" flow)
  */
 router.post('/verify-credentials', async (req, res) => {
+  const debug = {
+    emailReceived: null,
+    emailNormalized: null,
+    dbUserFound: false,
+    clerkApiCalled: false,
+    clerkResponse: null,
+    clerkError: null,
+    manualSearchResults: null,
+    finalResult: null,
+  }
+
   try {
     const { email } = req.body
 
     if (!email) {
-      return res.status(400).json({ error: 'Email is required' }) 
+      return res.status(400).json({ 
+        error: 'Email is required',
+        debug 
+      }) 
     }
 
-    console.log('[Login For Other] Checking if email exists:', email)
+    debug.emailReceived = email
 
-    // Check if user exists in Clerk (no password required)
-    const user = await findUserByEmail(email)
+    // Normalize email
+    const normalizedEmail = email.toLowerCase().trim()
+    debug.emailNormalized = normalizedEmail
 
-    if (!user) {
-      console.log('[Login For Other] User not found for email:', email)
-      return res.status(404).json({
-        success: false,
-        error: 'No account found with this email address',
+    // Check database first
+    try {
+      const dbUser = await prisma.user.findUnique({
+        where: { email: normalizedEmail },
+      })
+      debug.dbUserFound = !!dbUser
+    } catch (dbError) {
+      debug.dbError = dbError.message
+    }
+
+    // Try Clerk API with emailAddress filter
+    let users = null
+    try {
+      debug.clerkApiCalled = true
+      users = await clerk.users.getUserList({
+        emailAddress: [normalizedEmail],
+        limit: 1,
+      })
+      debug.clerkResponse = {
+        hasData: !!users?.data,
+        dataLength: users?.data?.length || 0,
+        totalCount: users?.totalCount || 0,
+        firstUserEmails: users?.data?.[0]?.emailAddresses?.map(e => e.emailAddress) || [],
+      }
+    } catch (clerkError) {
+      debug.clerkError = {
+        message: clerkError?.message,
+        type: clerkError?.constructor?.name,
+      }
+    }
+
+    // If emailAddress filter didn't work, try manual search
+    if (!users || !users.data || users.data.length === 0) {
+      try {
+        const allUsers = await clerk.users.getUserList({ limit: 500 })
+        debug.manualSearchResults = {
+          totalRetrieved: allUsers?.data?.length || 0,
+          emailsChecked: [],
+        }
+
+        if (allUsers?.data) {
+          const matchedUser = allUsers.data.find(user => {
+            if (!user.emailAddresses || user.emailAddresses.length === 0) return false
+            return user.emailAddresses.some(emailObj => {
+              const emailAddr = emailObj?.emailAddress?.toLowerCase()?.trim()
+              if (debug.manualSearchResults.emailsChecked.length < 10) {
+                debug.manualSearchResults.emailsChecked.push(emailAddr)
+              }
+              return emailAddr === normalizedEmail
+            })
+          })
+
+          if (matchedUser) {
+            users = { data: [matchedUser] }
+            debug.manualSearchResults.matchFound = true
+            debug.manualSearchResults.matchedEmail = matchedUser.emailAddresses?.[0]?.emailAddress
+          } else {
+            debug.manualSearchResults.matchFound = false
+          }
+        }
+      } catch (manualError) {
+        debug.manualSearchError = manualError.message
+      }
+    }
+
+    // Check if user was found
+    if (users && users.data && users.data.length > 0) {
+      const clerkUser = users.data[0]
+      const userEmail = clerkUser.emailAddresses?.[0]?.emailAddress || normalizedEmail
+
+      debug.finalResult = 'USER_FOUND'
+      
+      // Sync to database if needed
+      try {
+        const existingUser = await prisma.user.findUnique({
+          where: { email: normalizedEmail },
+        })
+
+        if (!existingUser) {
+          await prisma.user.create({
+            data: {
+              email: normalizedEmail,
+              clerkId: clerkUser.id,
+              name: clerkUser.firstName || clerkUser.lastName
+                ? `${clerkUser.firstName || ''} ${clerkUser.lastName || ''}`.trim()
+                : null,
+            },
+          })
+        }
+      } catch (syncError) {
+        debug.syncError = syncError.message
+      }
+
+      return res.json({
+        success: true,
+        message: 'User found and ready for verification',
+        email: normalizedEmail,
+        userId: clerkUser.id,
+        debug, // Include debug info in response
       })
     }
 
-    console.log('[Login For Other] User found:', user.id, user.email)
-
-    // User exists in Clerk - ready for OTP verification
-    console.log('[Login For Other] User exists in Clerk - ready for OTP')
-    res.json({
-      success: true,
-      message: 'User found and ready for verification',
-      email: email.toLowerCase().trim(),
-      userId: user.id,
+    // User not found
+    debug.finalResult = 'USER_NOT_FOUND'
+    return res.status(404).json({
+      success: false,
+      error: 'No account found with this email address',
+      debug, // Include debug info in 404 response
     })
   } catch (error) {
-    console.error('[Login For Other] Verify credentials error:', error)
-    res.status(500).json({ 
+    debug.finalResult = 'ERROR'
+    debug.error = {
+      message: error?.message,
+      type: error?.constructor?.name,
+      stack: error?.stack,
+    }
+    return res.status(500).json({ 
       success: false,
-      error: 'Internal server error', 
-      details: error.message 
+      error: 'Internal server error',
+      details: error.message,
+      debug,
     })
   }
 })
