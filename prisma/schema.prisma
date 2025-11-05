@@ -15,7 +15,8 @@ datasource db {
 model User {
   id            String         @id @default(uuid())
   email         String         @unique
-  supabaseId    String?        @unique @map("supabase_id") // Supabase Auth user ID
+  supabaseId    String?        @unique @map("supabase_id") // Supabase Auth user ID (legacy)
+  clerkId       String?        @unique @map("clerk_id") // Clerk user ID
   name          String?
   createdAt     DateTime       @default(now()) @map("created_at")
   updatedAt     DateTime       @updatedAt @map("updated_at")

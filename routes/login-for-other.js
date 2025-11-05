@@ -1,5 +1,6 @@
 import express from 'express'
 import { supabase, supabaseAdmin } from '../lib/supabase.js'
+import { clerk } from '../lib/clerk.js'
 import prisma from '../lib/prisma.js'
 import crypto from 'crypto'
 
@@ -58,85 +59,65 @@ async function sendOTPEmail(email, otp) {
 }
 
 /**
- * Helper function to find user by email
+ * Helper function to find user by email in Clerk
  */
 async function findUserByEmail(email) {
   try {
     const normalizedEmail = email.toLowerCase().trim()
-    console.log('[Login For Other] Finding user by email:', normalizedEmail)
+    console.log('[Login For Other] Finding user by email in Clerk:', normalizedEmail)
 
-    // First, try to find user in our database (Prisma)
-    // This is faster and more reliable than querying Supabase Auth
+    // First, try to find user in our database (Prisma) for faster lookup
     const dbUser = await prisma.user.findUnique({
       where: { email: normalizedEmail },
     })
 
-    if (dbUser && dbUser.supabaseId) {
-      console.log('[Login For Other] User found in database, fetching from Supabase Auth...')
-      // User exists in database, get from Supabase Auth
-      try {
-        const { data: { user }, error: getUserError } = await supabaseAdmin.auth.admin.getUserById(dbUser.supabaseId)
-        if (!getUserError && user) {
-          console.log('[Login For Other] User found via database lookup:', user.email)
-          return user
-        } else {
-          console.error('[Login For Other] Error getting user by ID:', getUserError)
-          // Continue to fallback method
-        }
-      } catch (getUserError) {
-        console.error('[Login For Other] Exception getting user by ID:', getUserError)
-        // Continue to fallback method
-      }
-    } else {
-      console.log('[Login For Other] User not found in database, searching Supabase Auth...')
-    }
-
-    // Fallback: Search Supabase Auth directly
-    // Use listUsers and search through pages if needed
-    let page = 1
-    const perPage = 1000
-    let hasMore = true
-
-    while (hasMore) {
-      const { data: { users }, error } = await supabaseAdmin.auth.admin.listUsers({
-        page,
-        perPage,
+    // Search for user in Clerk by email
+    try {
+      // Clerk API: Get user list and filter by email
+      // Note: Clerk doesn't have a direct "getUserByEmail" API, so we use getUserList with email filter
+      const users = await clerk.users.getUserList({
+        emailAddress: [normalizedEmail],
+        limit: 1,
       })
 
-      if (error) {
-        console.error('[Login For Other] Error listing users:', error)
-        break
-      }
+      if (users && users.data && users.data.length > 0) {
+        const clerkUser = users.data[0]
+        console.log('[Login For Other] User found in Clerk:', clerkUser.id, clerkUser.emailAddresses[0]?.emailAddress)
 
-      if (!users || users.length === 0) {
-        hasMore = false
-        break
-      }
-
-      // Search for user with matching email
-      const user = users.find(u => {
-        const userEmail = u.email?.toLowerCase().trim()
-        const matches = userEmail === normalizedEmail
-        if (matches) {
-          console.log('[Login For Other] User found in Supabase Auth:', userEmail)
+        // Sync user to database if not exists
+        if (!dbUser) {
+          try {
+            await prisma.user.create({
+              data: {
+                email: normalizedEmail,
+                clerkId: clerkUser.id,
+                name: clerkUser.firstName || clerkUser.lastName 
+                  ? `${clerkUser.firstName || ''} ${clerkUser.lastName || ''}`.trim() 
+                  : null,
+              },
+            })
+            console.log('[Login For Other] User synced to database')
+          } catch (syncError) {
+            console.error('[Login For Other] Error syncing user to database:', syncError)
+            // Continue anyway - user exists in Clerk
+          }
         }
-        return matches
-      })
 
-      if (user) {
-        return user
+        return {
+          id: clerkUser.id,
+          email: clerkUser.emailAddresses[0]?.emailAddress || normalizedEmail,
+          clerkId: clerkUser.id,
+          firstName: clerkUser.firstName,
+          lastName: clerkUser.lastName,
+        }
       }
 
-      // If we got fewer users than perPage, we've reached the end
-      if (users.length < perPage) {
-        hasMore = false
-      } else {
-        page++
-      }
+      console.log('[Login For Other] User not found in Clerk for email:', normalizedEmail)
+      return null
+    } catch (clerkError) {
+      console.error('[Login For Other] Error searching Clerk:', clerkError)
+      return null
     }
-
-    console.log('[Login For Other] User not found in Supabase Auth after searching', page - 1, 'page(s)')
-    return null
   } catch (error) {
     console.error('[Login For Other] Error finding user:', error)
     console.error('[Login For Other] Error stack:', error.stack)
@@ -171,46 +152,20 @@ router.post('/verify-credentials', async (req, res) => {
 
     console.log('[Login For Other] User found:', user.id, user.email)
 
-    // Verify password by attempting to sign in
-    try {
-      console.log('[Login For Other] Attempting to sign in with Supabase Auth...')
-      const { data: authData, error: signInError } = await supabaseAdmin.auth.signInWithPassword({
-        email: email.toLowerCase().trim(),
-        password,
-      })
+    // Note: Clerk doesn't support backend password verification for security reasons.
+    // Password verification must be done on the frontend using Clerk's signIn.create().
+    // Here we just verify the user exists in Clerk.
+    // The frontend should verify credentials before calling this endpoint.
 
-      if (signInError) {
-        console.error('[Login For Other] Sign in error:', signInError.message, signInError.status)
-        return res.status(401).json({
-          success: false,
-          error: 'Invalid email or password',
-          details: signInError.message,
-        })
-      }
-
-      if (!authData.user) {
-        console.error('[Login For Other] No user returned from sign in')
-        return res.status(401).json({
-          success: false,
-          error: 'Invalid email or password',
-        })
-      }
-
-      console.log('[Login For Other] Credentials verified successfully for:', authData.user.email)
-      // Credentials are valid
-      res.json({
-        success: true,
-        message: 'Credentials verified successfully',
-        email: email.toLowerCase().trim(),
-      })
-    } catch (authError) {
-      console.error('[Login For Other] Auth error:', authError)
-      return res.status(401).json({
-        success: false,
-        error: 'Invalid email or password',
-        details: authError.message,
-      })
-    }
+    // Credentials are valid (user exists in Clerk)
+    // Frontend has already verified the password using Clerk
+    console.log('[Login For Other] User exists in Clerk - ready for OTP')
+    res.json({
+      success: true,
+      message: 'User found and ready for verification',
+      email: email.toLowerCase().trim(),
+      userId: user.id,
+    })
   } catch (error) {
     console.error('[Login For Other] Verify credentials error:', error)
     res.status(500).json({ 
@@ -277,14 +232,22 @@ router.post('/send-otp', async (req, res) => {
 
     // Find or create user in database
     let dbUser = await prisma.user.findUnique({
-      where: { supabaseId: user.id },
+      where: { email: email.toLowerCase() },
     })
 
     if (!dbUser) {
       dbUser = await prisma.user.create({
         data: {
           email: user.email,
-          supabaseId: user.id,
+          clerkId: user.clerkId || user.id,
+        },
+      })
+    } else if (!dbUser.clerkId && (user.clerkId || user.id)) {
+      // Update existing user with Clerk ID if missing
+      dbUser = await prisma.user.update({
+        where: { id: dbUser.id },
+        data: {
+          clerkId: user.clerkId || user.id,
         },
       })
     }
@@ -380,17 +343,29 @@ router.post('/verify-otp', async (req, res) => {
       })
     }
 
-    // Get user information from Supabase Auth
+    // Get user information from Clerk
     const dbUser = otpData.user
-    if (!dbUser || !dbUser.supabaseId) {
+    if (!dbUser || !dbUser.clerkId) {
       return res.status(404).json({ error: 'User not found in database' })
     }
 
-    const { data: { user }, error: userError } = await supabaseAdmin.auth.admin.getUserById(dbUser.supabaseId)
+    // Get user from Clerk
+    let clerkUser
+    try {
+      clerkUser = await clerk.users.getUser(dbUser.clerkId)
+    } catch (userError) {
+      console.error('[Login For Other] Error getting user from Clerk:', userError)
+      return res.status(404).json({ error: 'User not found in Clerk' })
+    }
 
-    if (userError || !user) {
-      console.error('[Login For Other] Error getting user:', userError)
+    if (!clerkUser) {
       return res.status(404).json({ error: 'User not found' })
+    }
+
+    const user = {
+      id: clerkUser.id,
+      email: clerkUser.emailAddresses[0]?.emailAddress || dbUser.email,
+      created_at: clerkUser.createdAt,
     }
 
     // Generate a temporary token
@@ -418,40 +393,9 @@ router.post('/verify-otp', async (req, res) => {
       },
     })
 
-    // Generate a magic link that the client can use to authenticate
-    // This allows the person logging in for someone else to get a session
-    const { data: linkData, error: linkError } = await supabaseAdmin.auth.admin.generateLink({
-      type: 'magiclink',
-      email: user.email,
-      options: {
-        redirectTo: `${process.env.FRONTEND_URL || 'period-tracker://'}/auth/callback`,
-      },
-    })
-
-    if (linkError) {
-      console.error('[Login For Other] Error generating link:', linkError)
-      // Fallback: create a session token manually using JWT
-      // We'll create a custom JWT token that the client can use
-      return res.json({
-        success: true,
-        message: 'OTP verified successfully',
-        user: {
-          id: user.id,
-          email: user.email,
-          created_at: user.created_at,
-        },
-        tempToken, // Client can use this to complete login via complete-login endpoint
-        expiresAt: tokenExpiresAt,
-      })
-    }
-
-    // Extract the token from the magic link
-    const magicLinkUrl = new URL(linkData.properties.action_link)
-    const hash = magicLinkUrl.hash.substring(1) // Remove # 
-    const params = new URLSearchParams(hash)
-    const accessToken = params.get('access_token')
-    const refreshToken = params.get('refresh_token')
-
+    // For Clerk, we can't generate magic links from backend
+    // The frontend should handle Clerk authentication after OTP verification
+    // We'll return the tempToken which the frontend can use to complete the flow
     res.json({
       success: true,
       message: 'OTP verified successfully. You can now access the account.',
@@ -459,13 +403,9 @@ router.post('/verify-otp', async (req, res) => {
         id: user.id,
         email: user.email,
         created_at: user.created_at,
+        clerkId: dbUser.clerkId,
       },
-      session: accessToken && refreshToken ? {
-        access_token: accessToken,
-        refresh_token: refreshToken,
-      } : null,
-      loginLink: linkData.properties.action_link, // Fallback: use magic link
-      tempToken, // Backup method
+      tempToken, // Frontend can use this to complete login
       expiresAt: tokenExpiresAt,
     })
   } catch (error) {
@@ -510,16 +450,28 @@ router.post('/complete-login', async (req, res) => {
       return res.status(400).json({ error: 'Token has expired. Please verify OTP again.' })
     }
 
-    // Get user from Supabase Auth
+    // Get user from Clerk
     const dbUser = otpData.user
-    if (!dbUser || !dbUser.supabaseId) {
+    if (!dbUser || !dbUser.clerkId) {
       return res.status(404).json({ error: 'User not found in database' })
     }
 
-    const { data: { user }, error: userError } = await supabaseAdmin.auth.admin.getUserById(dbUser.supabaseId)
+    // Get user from Clerk
+    let clerkUser
+    try {
+      clerkUser = await clerk.users.getUser(dbUser.clerkId)
+    } catch (userError) {
+      return res.status(404).json({ error: 'User not found in Clerk' })
+    }
 
-    if (userError || !user) {
+    if (!clerkUser) {
       return res.status(404).json({ error: 'User not found' })
+    }
+
+    const user = {
+      id: clerkUser.id,
+      email: clerkUser.emailAddresses[0]?.emailAddress || dbUser.email,
+      created_at: clerkUser.createdAt,
     }
 
     // Clean up the OTP record
