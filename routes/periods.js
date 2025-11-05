@@ -113,6 +113,11 @@ router.use(verifyClerkAuth)
  * Helper function to get user's database ID
  */
 async function getDbUserId(req) {
+  console.log('[Periods] getDbUserId - Looking for user:', {
+    clerkId: req.user?.clerkId,
+    email: req.user?.email,
+  })
+
   // Find or create user in database
   let dbUser = await prisma.user.findFirst({
     where: {
@@ -123,19 +128,28 @@ async function getDbUserId(req) {
     },
   })
 
+  console.log('[Periods] getDbUserId - Found user:', dbUser ? { id: dbUser.id, email: dbUser.email } : 'Not found')
+
   if (!dbUser) {
+    console.log('[Periods] getDbUserId - Creating new user...')
     const userName = req.user.firstName || req.user.lastName
       ? `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim()
       : null
 
-    dbUser = await prisma.user.create({
-      data: {
-        email: req.user.email,
-        clerkId: req.user.clerkId,
-        name: userName,
-        userType: 'SELF',
-      },
-    })
+    try {
+      dbUser = await prisma.user.create({
+        data: {
+          email: req.user.email,
+          clerkId: req.user.clerkId,
+          name: userName,
+          userType: 'SELF',
+        },
+      })
+      console.log('[Periods] getDbUserId - User created:', { id: dbUser.id, email: dbUser.email })
+    } catch (createError) {
+      console.error('[Periods] getDbUserId - Error creating user:', createError)
+      throw createError
+    }
   }
 
   return dbUser.id
@@ -177,13 +191,32 @@ router.get('/', async (req, res) => {
  */
 router.post('/', async (req, res) => {
   try {
+    console.log('[Periods] POST /api/periods - Request received')
+    console.log('[Periods] Request body:', req.body)
+    console.log('[Periods] User from auth:', req.user)
+
     const { startDate, endDate, flowLevel } = req.body
 
     if (!startDate) {
+      console.log('[Periods] Error: startDate is required')
       return res.status(400).json({ error: 'startDate is required' })
     }
 
+    console.log('[Periods] Getting database user ID...')
     const dbUserId = await getDbUserId(req)
+    console.log('[Periods] Database user ID:', dbUserId)
+
+    if (!dbUserId) {
+      console.error('[Periods] Error: Could not get database user ID')
+      return res.status(500).json({ error: 'Could not identify user in database' })
+    }
+
+    console.log('[Periods] Creating period with data:', {
+      userId: dbUserId,
+      startDate: new Date(startDate).toISOString(),
+      endDate: endDate ? new Date(endDate).toISOString() : null,
+      flowLevel: flowLevel || null,
+    })
 
     const period = await prisma.period.create({
       data: {
@@ -193,6 +226,19 @@ router.post('/', async (req, res) => {
         flowLevel: flowLevel || null,
       },
     })
+
+    console.log('[Periods] Period created successfully:', {
+      id: period.id,
+      userId: period.userId,
+      startDate: period.startDate.toISOString(),
+      endDate: period.endDate?.toISOString() || null,
+    })
+
+    // Verify the period was actually saved
+    const verifyPeriod = await prisma.period.findUnique({
+      where: { id: period.id },
+    })
+    console.log('[Periods] Verified period in database:', verifyPeriod ? 'Yes' : 'No')
 
     res.json({
       success: true,
@@ -207,7 +253,17 @@ router.post('/', async (req, res) => {
     })
   } catch (error) {
     console.error('[Periods] Create error:', error)
-    res.status(500).json({ error: 'Internal server error', details: error.message })
+    console.error('[Periods] Error stack:', error.stack)
+    console.error('[Periods] Error details:', {
+      message: error.message,
+      code: error.code,
+      meta: error.meta,
+    })
+    res.status(500).json({ 
+      error: 'Internal server error', 
+      details: error.message,
+      code: error.code,
+    })
   }
 })
 
