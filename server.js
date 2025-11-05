@@ -43,6 +43,7 @@ app.get('/', (req, res) => {
         update: 'PATCH /api/user',
       },
       loginForOther: {
+        verifyCredentials: 'POST /api/login-for-other/verify-credentials',
         checkEmail: 'POST /api/login-for-other/check-email',
         sendOtp: 'POST /api/login-for-other/send-otp',
         verifyOtp: 'POST /api/login-for-other/verify-otp',
@@ -88,6 +89,7 @@ if (process.env.VERCEL !== '1' && !process.env.VERCEL_ENV) {
     console.log(`   GET    /api/auth/me`)
     console.log(`   GET    /api/user`)
     console.log(`   PATCH  /api/user`)
+    console.log(`   POST   /api/login-for-other/verify-credentials`)
     console.log(`   POST   /api/login-for-other/check-email`)
     console.log(`   POST   /api/login-for-other/send-otp`)
     console.log(`   POST   /api/login-for-other/verify-otp`)

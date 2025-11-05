@@ -62,21 +62,68 @@ async function sendOTPEmail(email, otp) {
  */
 async function findUserByEmail(email) {
   try {
-    // Use Supabase Admin API to get user by email
-    // Note: listUsers with email filter would be ideal, but if not available,
-    // we'll use getUserById after finding via listUsers (less efficient but works)
-    const { data: { users }, error } = await supabaseAdmin.auth.admin.listUsers({
-      page: 1,
-      perPage: 1000, // Adjust as needed
+    const normalizedEmail = email.toLowerCase().trim()
+
+    // First, try to find user in our database (Prisma)
+    // This is faster and more reliable than querying Supabase Auth
+    const dbUser = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
     })
 
-    if (error) {
-      console.error('[Login For Other] Error listing users:', error)
-      return null
+    if (dbUser && dbUser.supabaseId) {
+      // User exists in database, get from Supabase Auth
+      try {
+        const { data: { user }, error: getUserError } = await supabaseAdmin.auth.admin.getUserById(dbUser.supabaseId)
+        if (!getUserError && user) {
+          return user
+        }
+      } catch (getUserError) {
+        console.error('[Login For Other] Error getting user by ID:', getUserError)
+        // Continue to fallback method
+      }
     }
 
-    const user = users.find(u => u.email?.toLowerCase() === email.toLowerCase())
-    return user || null
+    // Fallback: Search Supabase Auth directly
+    // Use listUsers and search through pages if needed
+    let page = 1
+    const perPage = 1000
+    let hasMore = true
+
+    while (hasMore) {
+      const { data: { users }, error } = await supabaseAdmin.auth.admin.listUsers({
+        page,
+        perPage,
+      })
+
+      if (error) {
+        console.error('[Login For Other] Error listing users:', error)
+        break
+      }
+
+      if (!users || users.length === 0) {
+        hasMore = false
+        break
+      }
+
+      // Search for user with matching email
+      const user = users.find(u => {
+        const userEmail = u.email?.toLowerCase().trim()
+        return userEmail === normalizedEmail
+      })
+
+      if (user) {
+        return user
+      }
+
+      // If we got fewer users than perPage, we've reached the end
+      if (users.length < perPage) {
+        hasMore = false
+      } else {
+        page++
+      }
+    }
+
+    return null
   } catch (error) {
     console.error('[Login For Other] Error finding user:', error)
     return null
