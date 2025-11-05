@@ -1,0 +1,67 @@
+import express from 'express'
+import cors from 'cors'
+import dotenv from 'dotenv'
+import authRoutes from './routes/auth.js'
+import userRoutes from './routes/user.js'
+import loginForOtherRoutes from './routes/login-for-other.js'
+
+// Load environment variables
+dotenv.config()
+
+const app = express()
+const PORT = process.env.PORT || 3001
+
+// Middleware
+app.use(cors())
+app.use(express.json())
+app.use(express.urlencoded({ extended: true }))
+
+// Request logging middleware
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`)
+  next()
+})
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() })
+})
+
+// API Routes
+app.use('/api/auth', authRoutes)
+app.use('/api/user', userRoutes)
+app.use('/api/login-for-other', loginForOtherRoutes)
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ error: 'Route not found' })
+})
+
+// Error handler
+app.use((err, req, res, next) => {
+  console.error('[Server] Error:', err)
+  res.status(err.status || 500).json({
+    error: err.message || 'Internal server error',
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
+  })
+})
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`)
+  console.log(`📝 API endpoints:`)
+  console.log(`   POST   /api/auth/signup`)
+  console.log(`   POST   /api/auth/login`)
+  console.log(`   POST   /api/auth/refresh`)
+  console.log(`   POST   /api/auth/logout`)
+  console.log(`   GET    /api/auth/me`)
+  console.log(`   GET    /api/user`)
+  console.log(`   PATCH  /api/user`)
+  console.log(`   POST   /api/login-for-other/check-email`)
+  console.log(`   POST   /api/login-for-other/send-otp`)
+  console.log(`   POST   /api/login-for-other/verify-otp`)
+  console.log(`   POST   /api/login-for-other/complete-login`)
+  console.log(`   GET    /health`)
+})
+
+export default app
