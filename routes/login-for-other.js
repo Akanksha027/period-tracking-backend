@@ -825,8 +825,10 @@ router.post('/verify-credentials', async (req, res) => {
         // CRITICAL: Check if this user exists in our database as a 'SELF' user
         // Only 'SELF' users can be viewed by 'OTHER' users
         // For backward compatibility, also check for users without userType (they default to SELF)
+        let selfUser = null
         try {
-          const selfUser = await prisma.user.findFirst({
+          // Try querying with userType (if column exists)
+          selfUser = await prisma.user.findFirst({
             where: {
               email: normalizedEmail,
               OR: [
@@ -835,6 +837,32 @@ router.post('/verify-credentials', async (req, res) => {
               ],
             },
           })
+        } catch (schemaError) {
+          // If userType column doesn't exist yet, fall back to simple query
+          console.log('[Login For Other] userType column may not exist yet, using fallback query:', schemaError.message)
+          try {
+            selfUser = await prisma.user.findUnique({
+              where: { email: normalizedEmail },
+            })
+            // If user exists but doesn't have userType, treat as SELF (backward compatibility)
+            if (selfUser && !selfUser.userType) {
+              // Try to update userType to SELF (will fail if column doesn't exist, but that's okay)
+              try {
+                await prisma.user.update({
+                  where: { id: selfUser.id },
+                  data: { userType: 'SELF' },
+                })
+                selfUser.userType = 'SELF'
+              } catch (updateError) {
+                // Column doesn't exist yet, continue without userType
+                console.log('[Login For Other] Cannot update userType, column may not exist:', updateError.message)
+              }
+            }
+          } catch (fallbackError) {
+            console.error('[Login For Other] Fallback query also failed:', fallbackError)
+            throw fallbackError
+          }
+        }
 
         debug.selfUserCheck = {
           found: !!selfUser,
@@ -851,6 +879,11 @@ router.post('/verify-credentials', async (req, res) => {
             error: 'No account found with this email address. The person must create an account first using "Login for Yourself".',
             debug,
           })
+        }
+        
+        // If userType is null or undefined, treat as SELF (backward compatibility)
+        if (!selfUser.userType) {
+          selfUser.userType = 'SELF'
         }
 
         // User exists as 'SELF' - ready for OTP verification
@@ -947,20 +980,54 @@ router.post('/send-otp', async (req, res) => {
     // CRITICAL: Find the SELF user (the person whose data will be viewed)
     // Only SELF users can be viewed by OTHER users
     // For backward compatibility, also check for users without userType (they default to SELF)
-    const selfUser = await prisma.user.findFirst({
-      where: {
-        email: normalizedEmail,
-        OR: [
-          { userType: 'SELF' }, // Must be a SELF user
-          { userType: null }, // Backward compatibility: existing users without userType are SELF
-        ],
-      },
-    })
+    let selfUser = null
+    try {
+      // Try querying with userType (if column exists)
+      selfUser = await prisma.user.findFirst({
+        where: {
+          email: normalizedEmail,
+          OR: [
+            { userType: 'SELF' }, // Must be a SELF user
+            { userType: null }, // Backward compatibility: existing users without userType are SELF
+          ],
+        },
+      })
+    } catch (schemaError) {
+      // If userType column doesn't exist yet, fall back to simple query
+      console.log('[Login For Other] userType column may not exist yet, using fallback query:', schemaError.message)
+      try {
+        selfUser = await prisma.user.findUnique({
+          where: { email: normalizedEmail },
+        })
+        // If user exists but doesn't have userType, treat as SELF (backward compatibility)
+        if (selfUser && !selfUser.userType) {
+          // Try to update userType to SELF (will fail if column doesn't exist, but that's okay)
+          try {
+            await prisma.user.update({
+              where: { id: selfUser.id },
+              data: { userType: 'SELF' },
+            })
+            selfUser.userType = 'SELF'
+          } catch (updateError) {
+            // Column doesn't exist yet, continue without userType
+            console.log('[Login For Other] Cannot update userType, column may not exist:', updateError.message)
+          }
+        }
+      } catch (fallbackError) {
+        console.error('[Login For Other] Fallback query also failed:', fallbackError)
+        throw fallbackError
+      }
+    }
 
     if (!selfUser) {
       return res.status(404).json({
         error: 'No account found with this email address. The person must create an account first using "Login for Yourself".',
       })
+    }
+    
+    // If userType is null or undefined, treat as SELF (backward compatibility)
+    if (!selfUser.userType) {
+      selfUser.userType = 'SELF'
     }
 
     // Verify user exists in Clerk (for email sending)
