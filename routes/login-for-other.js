@@ -33,29 +33,56 @@ function generateOTP() {
 }
 
 /**
- * Send OTP email (mock implementation - replace with actual email service)
- * In production, use Resend, SendGrid, AWS SES, or Supabase's email service
+ * Send OTP email using Resend
+ * For testing: Use Resend's free tier (100 emails/day)
+ * Get API key from: https://resend.com/api-keys
  */
 async function sendOTPEmail(email, otp) {
-  // TODO: Replace with actual email service
-  console.log('='.repeat(80))
-  console.log('[OTP EMAIL]')
-  console.log(`To: ${email}`)
-  console.log(`Subject: Login Verification Code - Period Tracker`)
-  console.log(`Your verification code is: ${otp}`)
-  console.log(`This code expires in 10 minutes.`)
-  console.log(`If you didn't request this, please ignore this email.`)
-  console.log('='.repeat(80))
+  const resendApiKey = process.env.RESEND_API_KEY
   
-  // For now, we'll use Supabase's built-in email function if available
-  // Or integrate with a service like Resend:
-  // const resend = new Resend(process.env.RESEND_API_KEY)
-  // await resend.emails.send({
-  //   from: 'noreply@yourdomain.com',
-  //   to: email,
-  //   subject: 'Login Verification Code',
-  //   html: `<p>Your verification code is: <strong>${otp}</strong></p>`
-  // })
+  // If Resend is not configured, log to console (for development)
+  if (!resendApiKey) {
+    console.log('='.repeat(80))
+    console.log('[OTP EMAIL - NOT SENT - RESEND_API_KEY not configured]')
+    console.log(`To: ${email}`)
+    console.log(`Subject: Login Verification Code - Period Tracker`)
+    console.log(`Your verification code is: ${otp}`)
+    console.log(`This code expires in 10 minutes.`)
+    console.log('='.repeat(80))
+    console.log('⚠️  To enable email sending, add RESEND_API_KEY to your environment variables')
+    console.log('   Get your API key from: https://resend.com/api-keys')
+    return
+  }
+
+  try {
+    const { Resend } = await import('resend')
+    const resend = new Resend(resendApiKey)
+
+    const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev'
+    
+    const result = await resend.emails.send({
+      from: fromEmail,
+      to: email,
+      subject: 'Login Verification Code - Period Tracker',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #333;">Login Verification Code</h2>
+          <p>Your verification code for "Login for Someone Else" is:</p>
+          <div style="background-color: #f4f4f4; padding: 20px; text-align: center; margin: 20px 0; border-radius: 5px;">
+            <h1 style="color: #0066cc; font-size: 32px; margin: 0; letter-spacing: 5px;">${otp}</h1>
+          </div>
+          <p style="color: #666; font-size: 14px;">This code expires in 10 minutes.</p>
+          <p style="color: #666; font-size: 14px;">If you didn't request this code, please ignore this email.</p>
+        </div>
+      `,
+      text: `Your verification code is: ${otp}\n\nThis code expires in 10 minutes.\n\nIf you didn't request this, please ignore this email.`,
+    })
+
+    console.log('[OTP EMAIL] Sent successfully via Resend:', result)
+  } catch (error) {
+    console.error('[OTP EMAIL] Error sending via Resend:', error)
+    throw error
+  }
 }
 
 /**
