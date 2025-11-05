@@ -80,16 +80,33 @@ async function sendOTPEmail(email, otp) {
         body: JSON.stringify(requestBody),
       })
 
-      const result = await response.json()
-      
-      console.log('[OTP EMAIL] EmailJS response:', {
+      // Get response text first to handle non-JSON responses
+      const responseText = await response.text()
+      console.log('[OTP EMAIL] EmailJS raw response:', {
         status: response.status,
         statusText: response.statusText,
-        result: result,
+        contentType: response.headers.get('content-type'),
+        responseText: responseText.substring(0, 500), // First 500 chars
       })
+
+      let result
+      try {
+        result = JSON.parse(responseText)
+      } catch (parseError) {
+        // If response is not JSON, it might be HTML error page or plain text
+        console.error('[OTP EMAIL] Failed to parse EmailJS response as JSON:', parseError)
+        throw new Error(`EmailJS returned non-JSON response: ${responseText.substring(0, 200)}`)
+      }
+      
+      console.log('[OTP EMAIL] EmailJS parsed response:', result)
       
       if (!response.ok) {
-        throw new Error(result.text || result.message || 'EmailJS API error')
+        throw new Error(result.text || result.message || result.error || 'EmailJS API error')
+      }
+
+      // EmailJS returns 200 OK with status "success" or "error" in the response
+      if (result.status === 'error' || result.text === 'error') {
+        throw new Error(result.text || result.message || 'EmailJS returned error status')
       }
 
       console.log('[OTP EMAIL] ✅ Sent successfully via EmailJS')
