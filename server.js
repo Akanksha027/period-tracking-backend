@@ -8,6 +8,7 @@ import periodsRoutes from './routes/periods.js'
 import symptomsRoutes from './routes/symptoms.js'
 import moodsRoutes from './routes/moods.js'
 import chatRoutes from './routes/chat.js'
+import reminderRoutes from './routes/reminders.js'
 
 // Verify chat route is loaded
 if (!chatRoutes) {
@@ -80,9 +81,11 @@ app.use('/api/periods', periodsRoutes)
 app.use('/api/symptoms', symptomsRoutes)
 app.use('/api/moods', moodsRoutes)
 app.use('/api/chat', chatRoutes)
+app.use('/api/reminders', reminderRoutes)
 
 // Log that chat route is registered
 console.log('[Server] Chat route registered at /api/chat')
+console.log('[Server] Reminder routes registered at /api/reminders')
 
 // 404 handler
 app.use((req, res) => {

@@ -37,6 +37,7 @@ model User {
   notes         Note[]
   settings      UserSettings?
   otpCodes      OtpCode[]
+  reminders     Reminder[]
   
   @@index([userType])
   @@index([viewedUserId])
@@ -157,4 +158,22 @@ model OtpCode {
   @@index([email])
   @@index([userId])
   @@map("otp_codes")
+}
+
+// Reminders - AI-generated reminders for users
+model Reminder {
+  id          String    @id @default(uuid())
+  userId      String    @map("user_id")
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  message     String    // AI-generated reminder message
+  phase       String?   // Current cycle phase when reminder was sent
+  cycleDay    Int?      @map("cycle_day") // Cycle day when reminder was sent
+  
+  sentAt      DateTime  @default(now()) @map("sent_at")
+  
+  createdAt   DateTime  @default(now()) @map("created_at")
+  
+  @@index([userId, sentAt])
+  @@map("reminders")
 }

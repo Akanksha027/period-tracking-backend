@@ -165,15 +165,15 @@ router.post('/', verifyClerkAuth, async (req, res) => {
         },
         symptoms: {
           orderBy: { date: 'desc' },
-          take: 50, // Only last 50 symptoms
+          take: 100, // Increased to get more symptom history for pattern recognition
         },
         moods: {
           orderBy: { date: 'desc' },
-          take: 50, // Only last 50 moods
+          take: 100, // Increased to get more mood history for pattern recognition
         },
         notes: {
           orderBy: { date: 'desc' },
-          take: 20, // Only last 20 notes
+          take: 50, // Increased to get more personal notes and concerns
         },
       },
     })
@@ -192,6 +192,17 @@ router.post('/', verifyClerkAuth, async (req, res) => {
 
     const systemPrompt = `You are Flo Health Assistant, a professional and knowledgeable women's health assistant. Your role is to provide evidence-based, medically-informed guidance about menstrual health symptoms in a clear, professional, and supportive manner.
 
+**YOUR CORE MISSION:**
+You have COMPLETE ACCESS to the user's period tracking data, symptom history, mood patterns, personal notes, cycle patterns, and settings. Use ALL of this data to provide HIGHLY PERSONALIZED advice that is specific to HER patterns, not generic information. Your responses should demonstrate that you know her history and can identify patterns in her cycle and symptoms.
+
+**CRITICAL CYCLE AWARENESS:**
+- You will be provided with the user's CURRENT CYCLE DAY and PHASE (Menstrual, Follicular, Ovulation, or Luteal)
+- You will know exactly which day of their cycle they are on (e.g., "Day 15 of 28-day cycle")
+- You will know when their last period was and when their next period is predicted
+- ALWAYS reference their current cycle phase and day when giving advice about symptoms, moods, or cycle-related questions
+- If the user has NOT logged any periods, you MUST tell them they need to log periods first to track their cycle
+- Use the cycle information to provide phase-specific advice and predictions
+
 Communication Style:
 - Professional, clear, and informative tone
 - Use the user's name when addressing them (you will be provided with their name)
@@ -201,6 +212,10 @@ Communication Style:
 - Focus on education and understanding
 - Provide actionable, evidence-based advice
 - Clearly distinguish between normal symptoms and when medical attention is needed
+- **ALWAYS reference specific data from her tracking history** - dates, frequencies, patterns
+- **IDENTIFY PATTERNS** in her symptoms, moods, and cycle phases
+- **CORRELATE** symptoms with moods and cycle phases when patterns exist
+- **PREDICT** based on her actual cycle history, not generic averages
 
 Response Structure for Symptom Queries:
 1. START with EMOTIONAL SUPPORT and VALIDATION
@@ -269,16 +284,20 @@ CRITICAL RULES:
 3. START with EMOTIONAL SUPPORT - validate their feelings, let them know they're not alone
 4. FOCUS ENTIRELY on PRACTICAL TIPS and ACTIONABLE GUIDANCE - NO scientific explanations about causes, mechanisms, or medical terms
 5. Provide emotional support alongside physical tips - acknowledge that dealing with symptoms can be tough
-6. Use their cycle/symptom data to give personalized advice when available
-7. Guide them toward better health with specific, doable suggestions
-8. Product suggestions with delivery links come at the END - make them easy to find and order
-9. Use web URLs (https://) not deep links - links should open in browser
-10. Format product links clearly: product name followed by delivery app link on same line
-11. When user asks about THEIR patterns/cycle but hasn't entered data: Politely mention they haven't updated info yet, but still answer their other questions with helpful guidance
-12. When user HAS data: Use their actual cycle and symptom patterns to provide personalized, relevant advice
-13. Be supportive, caring, and encouraging - they need both emotional and physical support
-14. Keep responses COMPLETE - never cut off mid-sentence
-15. Remember: You're helping guide them toward feeling better both emotionally and physically`
+6. **YOU HAVE ACCESS TO ALL USER DATA** - Use their COMPLETE cycle history, symptom patterns, mood correlations, and personal notes to provide personalized advice
+7. **IDENTIFY PATTERNS FIRST** - Before giving generic advice, check if the user has logged similar symptoms before, in which cycle phase, and correlate with moods
+8. **REFERENCE SPECIFIC DATA** - Mention actual dates, frequencies, and patterns from their tracking history
+9. Guide them toward better health with specific, doable suggestions based on THEIR patterns
+10. Product suggestions with delivery links come at the END - make them easy to find and order
+11. Use web URLs (https://) not deep links - links should open in browser
+12. Format product links clearly: product name followed by delivery app link on same line
+13. When user asks about THEIR patterns/cycle but hasn't entered data: Politely mention they haven't updated info yet, but still answer their other questions with helpful guidance
+14. When user HAS data: **ALWAYS** reference their actual patterns, frequencies, dates, and correlations. Show that you know their history.
+15. **PREDICT BASED ON PATTERNS** - If they've logged symptoms in specific cycle phases before, predict when they might occur again
+16. **CORRELATE EVERYTHING** - Connect symptoms with moods, cycle phases, and personal notes to provide comprehensive advice
+17. Be supportive, caring, and encouraging - they need both emotional and physical support
+18. Keep responses COMPLETE - never cut off mid-sentence
+19. Remember: You're helping guide them toward feeling better both emotionally and physically by using their COMPLETE tracking history`
 
     // Build comprehensive user context from ALL their data
     let userCycleContext = ''
@@ -373,10 +392,7 @@ CRITICAL RULES:
             }
           }
           
-          // Current period status with correct end date calculation
-          // Use the user's period length setting
-          const periodLengthForCalc = userPeriodLength
-          
+          // Current cycle day and phase calculation
           const today = new Date()
           const todayYear = today.getFullYear()
           const todayMonth = today.getMonth()
@@ -384,26 +400,61 @@ CRITICAL RULES:
           const todayLocal = new Date(todayYear, todayMonth, todayDay)
           todayLocal.setHours(0, 0, 0, 0)
           
-          const activePeriod = dbUserWithData.periods.find(p => {
-            const start = new Date(p.startDate)
+          // Calculate cycle length from history or settings
+          const avgCycleLength = (() => {
+            if (dbUserWithData.periods.length >= 2) {
+              const cycles = []
+              for (let i = 0; i < dbUserWithData.periods.length - 1; i++) {
+                const current = new Date(dbUserWithData.periods[i].startDate)
+                const next = new Date(dbUserWithData.periods[i + 1].startDate)
+                const diff = Math.abs(Math.ceil((current.getTime() - next.getTime()) / (1000 * 60 * 60 * 24)))
+                cycles.push(diff)
+              }
+              const avg = Math.round(cycles.reduce((a, b) => a + b, 0) / cycles.length)
+              return avg > 0 ? avg : (dbUserWithData.settings?.averageCycleLength || 28)
+            }
+            return dbUserWithData.settings?.averageCycleLength || 28
+          })()
+          
+          // Get last period end date
+          const lastPeriod = dbUserWithData.periods[0]
+          const lastPeriodStart = new Date(lastPeriod.startDate)
+          lastPeriodStart.setHours(0, 0, 0, 0)
+          
+          let lastPeriodEnd = new Date(lastPeriodStart)
+          if (lastPeriod.endDate) {
+            lastPeriodEnd = new Date(lastPeriod.endDate)
+          } else {
+            lastPeriodEnd.setDate(lastPeriodEnd.getDate() + userPeriodLength - 1)
+          }
+          lastPeriodEnd.setHours(0, 0, 0, 0)
+          
+          // Check if currently on period
+          const activePeriod = dbUserWithData.periods.find(period => {
+            const start = new Date(period.startDate)
             const startLocal = new Date(start.getFullYear(), start.getMonth(), start.getDate())
             startLocal.setHours(0, 0, 0, 0)
             
-            // Calculate end date if not set, using user's average period length
             let endLocal = null
-            if (p.endDate) {
-              const end = new Date(p.endDate)
+            if (period.endDate) {
+              const end = new Date(period.endDate)
               endLocal = new Date(end.getFullYear(), end.getMonth(), end.getDate())
               endLocal.setHours(0, 0, 0, 0)
             } else {
               endLocal = new Date(startLocal)
-              endLocal.setDate(endLocal.getDate() + periodLengthForCalc - 1)
+              endLocal.setDate(endLocal.getDate() + userPeriodLength - 1)
             }
             
             return startLocal <= todayLocal && endLocal >= todayLocal
           })
           
+          // Calculate current cycle day and phase
+          let currentCycleDay = null
+          let currentPhase = null
+          let cycleDayDescription = ''
+          
           if (activePeriod) {
+            // Currently on period (Menstrual Phase)
             const periodStart = new Date(activePeriod.startDate)
             const periodStartLocal = new Date(periodStart.getFullYear(), periodStart.getMonth(), periodStart.getDate())
             periodStartLocal.setHours(0, 0, 0, 0)
@@ -415,33 +466,147 @@ CRITICAL RULES:
               periodEndLocal.setHours(0, 0, 0, 0)
             } else {
               periodEndLocal = new Date(periodStartLocal)
-              periodEndLocal.setDate(periodEndLocal.getDate() + periodLengthForCalc - 1)
+              periodEndLocal.setDate(periodEndLocal.getDate() + userPeriodLength - 1)
             }
             
             const diff = Math.floor((todayLocal.getTime() - periodStartLocal.getTime()) / (1000 * 60 * 60 * 24))
             const daysInPeriod = diff + 1
             const totalPeriodDays = Math.floor((periodEndLocal.getTime() - periodStartLocal.getTime()) / (1000 * 60 * 60 * 24)) + 1
             
-            userCycleContext += `\n- Current Period Status:\n`
-            userCycleContext += `  • Started: ${periodStartLocal.toLocaleDateString()}\n`
-            userCycleContext += `  • Ends: ${periodEndLocal.toLocaleDateString()} (calculated using ${periodLengthForCalc} day average)\n`
-            userCycleContext += `  • Today is Day ${daysInPeriod} of ${totalPeriodDays}\n`
-            userCycleContext += `  • IMPORTANT: When telling the user about their period, always mention the calculated end date (${periodEndLocal.toLocaleDateString()}), not "ongoing". For example: "Your period started on ${periodStartLocal.toLocaleDateString()} and ended on ${periodEndLocal.toLocaleDateString()} (${periodLengthForCalc} days total)." If the period is in the past, say "ended" not "will end".\n`
+            currentCycleDay = daysInPeriod
+            currentPhase = 'Menstrual'
+            cycleDayDescription = `Day ${daysInPeriod} of ${totalPeriodDays} of period (Menstrual Phase)`
+            
+            userCycleContext += `\n- CURRENT CYCLE STATUS:\n`
+            userCycleContext += `  • Phase: Menstrual (Period)\n`
+            userCycleContext += `  • Cycle Day: ${daysInPeriod} (Day ${daysInPeriod} of period)\n`
+            userCycleContext += `  • Period Started: ${periodStartLocal.toLocaleDateString()}\n`
+            userCycleContext += `  • Period Ends: ${periodEndLocal.toLocaleDateString()}\n`
+            userCycleContext += `  • Total Period Days: ${totalPeriodDays}\n`
+          } else {
+            // Calculate days since last period ended
+            const daysSinceLastPeriodEnd = Math.floor((todayLocal.getTime() - lastPeriodEnd.getTime()) / (1000 * 60 * 60 * 24))
+            
+            if (daysSinceLastPeriodEnd >= 0) {
+              // Calculate cycle day (day 1 is first day of period, so day after period ends is day after period length)
+              currentCycleDay = daysSinceLastPeriodEnd + 1 + userPeriodLength
+              
+              // Determine phase based on cycle day
+              // Menstrual: Days 1-5 (period)
+              // Follicular: Days 6-13 (after period, before ovulation)
+              // Ovulation: Days 14-15 (around day 14)
+              // Luteal: Days 16-28+ (after ovulation, before next period)
+              
+              if (currentCycleDay <= userPeriodLength) {
+                currentPhase = 'Menstrual'
+              } else if (currentCycleDay <= 13) {
+                currentPhase = 'Follicular'
+              } else if (currentCycleDay <= 15) {
+                currentPhase = 'Ovulation'
+              } else {
+                currentPhase = 'Luteal'
+              }
+              
+              // Adjust for user's actual cycle length
+              const ovulationDay = Math.round(avgCycleLength / 2)
+              const fertileStart = ovulationDay - 5
+              const fertileEnd = ovulationDay
+              
+              if (currentCycleDay > userPeriodLength && currentCycleDay < fertileStart) {
+                currentPhase = 'Follicular'
+              } else if (currentCycleDay >= fertileStart && currentCycleDay <= fertileEnd) {
+                currentPhase = 'Ovulation'
+              } else if (currentCycleDay > fertileEnd) {
+                currentPhase = 'Luteal'
+              }
+              
+              cycleDayDescription = `Day ${currentCycleDay} of ${avgCycleLength}-day cycle (${currentPhase} Phase)`
+              
+              userCycleContext += `\n- CURRENT CYCLE STATUS:\n`
+              userCycleContext += `  • Phase: ${currentPhase}\n`
+              userCycleContext += `  • Cycle Day: ${currentCycleDay} of ${avgCycleLength}\n`
+              userCycleContext += `  • Last Period: ${lastPeriodStart.toLocaleDateString()} to ${lastPeriodEnd.toLocaleDateString()}\n`
+              userCycleContext += `  • Days Since Period Ended: ${daysSinceLastPeriodEnd}\n`
+            }
           }
+          
+          // Next period prediction
+          if (avgCycleLength) {
+            const nextPeriodPredicted = new Date(lastPeriodEnd)
+            nextPeriodPredicted.setDate(nextPeriodPredicted.getDate() + avgCycleLength)
+            const daysUntilNextPeriod = Math.floor((nextPeriodPredicted.getTime() - todayLocal.getTime()) / (1000 * 60 * 60 * 24))
+            
+            userCycleContext += `  • Next Period Predicted: ${nextPeriodPredicted.toLocaleDateString()} (${daysUntilNextPeriod} days away)\n`
+          }
+          
+          userCycleContext += `\n- IMPORTANT CYCLE INFORMATION:\n`
+          userCycleContext += `  • Current Status: ${cycleDayDescription || 'Unable to calculate'}\n`
+          userCycleContext += `  • Average Cycle Length: ${avgCycleLength} days\n`
+          userCycleContext += `  • Average Period Length: ${userPeriodLength} days\n`
+          userCycleContext += `  • When user asks about their cycle, phase, or cycle day, ALWAYS mention: "${cycleDayDescription || 'Please log your periods to track your cycle'}"\n`
+          userCycleContext += `  • Reference the current phase (${currentPhase || 'Unknown'}) when giving advice about symptoms, moods, or cycle-related questions\n`
+        } else {
+          // No period data - important message for AI
+          userCycleContext += `\n\n⚠️ IMPORTANT: The user has NOT logged any period information yet.\n`
+          userCycleContext += `- When they ask about their cycle, phase, cycle day, or period predictions, you MUST tell them:\n`
+          userCycleContext += `  "I notice you haven't updated any period information in the app yet. To give you personalized insights about your cycle, track when your periods occur, and help you understand which phase you're in, please log your periods in the app first. However, I'm still here to help you with any questions you have!"\n`
+          userCycleContext += `- Do NOT make up cycle information or assume default values\n`
+          userCycleContext += `- Still answer their other questions about symptoms, health, etc., but be clear about cycle information limitations\n`
         }
         
-        // Symptom Data
+        // Symptom Data - Enhanced with cycle correlation
         if (hasSymptomData && dbUserWithData.symptoms) {
-          userCycleContext += `\nSYMPTOM TRACKING (${dbUserWithData.symptoms.length} entries):\n`
+          userCycleContext += `\nSYMPTOM TRACKING (${dbUserWithData.symptoms.length} entries - COMPLETE HISTORY):\n`
           
+          // Symptom frequency and severity analysis
           const symptomCounts = {}
+          const symptomCycleCorrelation = {} // Track symptoms by cycle phase
+          
           dbUserWithData.symptoms.forEach(s => {
             if (!symptomCounts[s.type]) {
-              symptomCounts[s.type] = { count: 0, avgSeverity: 0, recent: [] }
+              symptomCounts[s.type] = { count: 0, avgSeverity: 0, recent: [], dates: [], severities: [] }
             }
             symptomCounts[s.type].count++
             symptomCounts[s.type].avgSeverity += s.severity
             symptomCounts[s.type].recent.push(new Date(s.date))
+            symptomCounts[s.type].dates.push(new Date(s.date))
+            symptomCounts[s.type].severities.push(s.severity)
+            
+            // Correlate symptom with cycle phase
+            if (dbUserWithData.periods.length > 0) {
+              const symptomDate = new Date(s.date)
+              const sortedPeriods = [...dbUserWithData.periods].sort((a, b) => new Date(b.startDate) - new Date(a.startDate))
+              
+              // Find which period this symptom is closest to
+              for (const period of sortedPeriods) {
+                const periodStart = new Date(period.startDate)
+                const periodEnd = period.endDate ? new Date(period.endDate) : (() => {
+                  const end = new Date(periodStart)
+                  end.setDate(end.getDate() + userPeriodLength - 1)
+                  return end
+                })()
+                
+                const daysSincePeriodStart = Math.floor((symptomDate - periodStart) / (1000 * 60 * 60 * 24))
+                
+                if (daysSincePeriodStart >= -7 && daysSincePeriodStart <= userPeriodLength + 14) {
+                  let phase = 'unknown'
+                  if (daysSincePeriodStart < 0) phase = 'PMS/Pre-period'
+                  else if (daysSincePeriodStart >= 0 && daysSincePeriodStart < userPeriodLength) phase = 'Period'
+                  else if (daysSincePeriodStart >= userPeriodLength && daysSincePeriodStart < userPeriodLength + 7) phase = 'Post-period'
+                  else if (daysSincePeriodStart >= userPeriodLength + 7 && daysSincePeriodStart < userPeriodLength + 14) phase = 'Fertile/Ovulation'
+                  else phase = 'Luteal'
+                  
+                  if (!symptomCycleCorrelation[s.type]) {
+                    symptomCycleCorrelation[s.type] = {}
+                  }
+                  if (!symptomCycleCorrelation[s.type][phase]) {
+                    symptomCycleCorrelation[s.type][phase] = 0
+                  }
+                  symptomCycleCorrelation[s.type][phase]++
+                  break
+                }
+              }
+            }
           })
           
           const symptomAnalysis = Object.entries(symptomCounts)
@@ -449,49 +614,239 @@ CRITICAL RULES:
               type,
               count: data.count,
               avgSeverity: Math.round((data.avgSeverity / data.count) * 10) / 10,
-              lastOccurrence: new Date(Math.max(...data.recent.map(d => d.getTime())))
+              maxSeverity: Math.max(...data.severities),
+              minSeverity: Math.min(...data.severities),
+              lastOccurrence: new Date(Math.max(...data.recent.map(d => d.getTime()))),
+              firstOccurrence: new Date(Math.min(...data.recent.map(d => d.getTime()))),
+              cycleCorrelation: symptomCycleCorrelation[type] || {},
+              trend: data.severities.length >= 3 ? 
+                (data.severities.slice(-3).reduce((a, b) => a + b, 0) / 3 > data.avgSeverity ? 'increasing' : 
+                 data.severities.slice(-3).reduce((a, b) => a + b, 0) / 3 < data.avgSeverity ? 'decreasing' : 'stable') 
+                : 'unknown'
             }))
             .sort((a, b) => b.count - a.count)
           
-          userCycleContext += `- Symptom Frequency Analysis:\n`
-          symptomAnalysis.slice(0, 5).forEach(s => {
-            userCycleContext += `  • ${s.type}: ${s.count} times (avg severity: ${s.avgSeverity}/5, last: ${s.lastOccurrence.toLocaleDateString()})\n`
+          userCycleContext += `- Complete Symptom Analysis:\n`
+          symptomAnalysis.forEach(s => {
+            userCycleContext += `  • ${s.type}:\n`
+            userCycleContext += `    - Frequency: ${s.count} times logged\n`
+            userCycleContext += `    - Severity: Average ${s.avgSeverity}/5, Range ${s.minSeverity}-${s.maxSeverity}/5\n`
+            userCycleContext += `    - Trend: ${s.trend}\n`
+            userCycleContext += `    - First logged: ${s.firstOccurrence.toLocaleDateString()}\n`
+            userCycleContext += `    - Last logged: ${s.lastOccurrence.toLocaleDateString()}\n`
+            if (Object.keys(s.cycleCorrelation).length > 0) {
+              const topPhase = Object.entries(s.cycleCorrelation).sort(([, a], [, b]) => b - a)[0]
+              userCycleContext += `    - Most common during: ${topPhase[0]} phase (${topPhase[1]} times)\n`
+            }
           })
+          
+          // Recent symptoms (last 7 days)
+          const sevenDaysAgo = new Date()
+          sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
+          const recentSymptoms = dbUserWithData.symptoms
+            .filter(s => new Date(s.date) >= sevenDaysAgo)
+            .sort((a, b) => new Date(b.date) - new Date(a.date))
+          
+          if (recentSymptoms.length > 0) {
+            userCycleContext += `\n- Recent Symptoms (Last 7 Days):\n`
+            recentSymptoms.forEach(s => {
+              userCycleContext += `  • ${new Date(s.date).toLocaleDateString()}: ${s.type} (severity: ${s.severity}/5)\n`
+            })
+          }
         }
         
-        // Mood Data
+        // Mood Data - Enhanced with cycle correlation
         if (hasMoodData && dbUserWithData.moods) {
-          userCycleContext += `\nMOOD TRACKING (${dbUserWithData.moods.length} entries):\n`
+          userCycleContext += `\nMOOD TRACKING (${dbUserWithData.moods.length} entries - COMPLETE HISTORY):\n`
           
           const moodCounts = {}
+          const moodCycleCorrelation = {}
+          const moodDates = []
+          
           dbUserWithData.moods.forEach(m => {
             moodCounts[m.type] = (moodCounts[m.type] || 0) + 1
+            moodDates.push({ type: m.type, date: new Date(m.date) })
+            
+            // Correlate mood with cycle phase
+            if (dbUserWithData.periods.length > 0) {
+              const moodDate = new Date(m.date)
+              const sortedPeriods = [...dbUserWithData.periods].sort((a, b) => new Date(b.startDate) - new Date(a.startDate))
+              
+              for (const period of sortedPeriods) {
+                const periodStart = new Date(period.startDate)
+                const periodEnd = period.endDate ? new Date(period.endDate) : (() => {
+                  const end = new Date(periodStart)
+                  end.setDate(end.getDate() + userPeriodLength - 1)
+                  return end
+                })()
+                
+                const daysSincePeriodStart = Math.floor((moodDate - periodStart) / (1000 * 60 * 60 * 24))
+                
+                if (daysSincePeriodStart >= -7 && daysSincePeriodStart <= userPeriodLength + 14) {
+                  let phase = 'unknown'
+                  if (daysSincePeriodStart < 0) phase = 'PMS/Pre-period'
+                  else if (daysSincePeriodStart >= 0 && daysSincePeriodStart < userPeriodLength) phase = 'Period'
+                  else if (daysSincePeriodStart >= userPeriodLength && daysSincePeriodStart < userPeriodLength + 7) phase = 'Post-period'
+                  else if (daysSincePeriodStart >= userPeriodLength + 7 && daysSincePeriodStart < userPeriodLength + 14) phase = 'Fertile/Ovulation'
+                  else phase = 'Luteal'
+                  
+                  if (!moodCycleCorrelation[m.type]) {
+                    moodCycleCorrelation[m.type] = {}
+                  }
+                  if (!moodCycleCorrelation[m.type][phase]) {
+                    moodCycleCorrelation[m.type][phase] = 0
+                  }
+                  moodCycleCorrelation[m.type][phase]++
+                  break
+                }
+              }
+            }
           })
           
+          // Most common moods
           const mostCommonMoods = Object.entries(moodCounts)
             .sort(([, a], [, b]) => b - a)
-            .slice(0, 5)
-            .map(([mood, count]) => `${mood} (${count}x)`)
-            .join(', ')
+            .map(([mood, count]) => ({ mood, count, correlation: moodCycleCorrelation[mood] || {} }))
           
-          userCycleContext += `- Most Common Moods: ${mostCommonMoods}\n`
+          userCycleContext += `- Complete Mood Analysis:\n`
+          mostCommonMoods.slice(0, 10).forEach(({ mood, count, correlation }) => {
+            userCycleContext += `  • ${mood}: ${count} times logged`
+            if (Object.keys(correlation).length > 0) {
+              const topPhase = Object.entries(correlation).sort(([, a], [, b]) => b - a)[0]
+              userCycleContext += ` (most common during ${topPhase[0]} phase: ${topPhase[1]} times)`
+            }
+            userCycleContext += `\n`
+          })
+          
+          // Recent moods (last 7 days)
+          const sevenDaysAgo = new Date()
+          sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
+          const recentMoods = moodDates
+            .filter(m => m.date >= sevenDaysAgo)
+            .sort((a, b) => b.date - a.date)
+          
+          if (recentMoods.length > 0) {
+            userCycleContext += `\n- Recent Moods (Last 7 Days):\n`
+            recentMoods.forEach(m => {
+              userCycleContext += `  • ${m.date.toLocaleDateString()}: ${m.type}\n`
+            })
+          }
+          
+          // Mood patterns
+          const positiveMoods = ['happy', 'energetic', 'calm', 'excited', 'confident', 'grateful', 'peaceful']
+          const negativeMoods = ['anxious', 'sad', 'irritated', 'stressed', 'tired', 'overwhelmed', 'frustrated']
+          
+          const positiveCount = mostCommonMoods.filter(m => positiveMoods.includes(m.mood)).reduce((sum, m) => sum + m.count, 0)
+          const negativeCount = mostCommonMoods.filter(m => negativeMoods.includes(m.mood)).reduce((sum, m) => sum + m.count, 0)
+          
+          if (positiveCount + negativeCount > 0) {
+            const positiveRatio = (positiveCount / (positiveCount + negativeCount) * 100).toFixed(1)
+            userCycleContext += `\n- Emotional Pattern: ${positiveRatio}% positive moods, ${(100 - positiveRatio).toFixed(1)}% challenging moods\n`
+          }
         }
         
-        // Settings
+        // Settings - Complete user profile (ALWAYS USE THESE CURRENT SETTINGS)
         if (hasSettings && dbUserWithData.settings) {
-          userCycleContext += `\nUSER SETTINGS:\n`
-          userCycleContext += `- Average Cycle Length: ${dbUserWithData.settings.averageCycleLength} days\n`
-          userCycleContext += `- Average Period Length: ${dbUserWithData.settings.averagePeriodLength || dbUserWithData.settings.periodDuration} days\n`
+          userCycleContext += `\nUSER PROFILE & SETTINGS (CURRENT - USE THESE VALUES FOR ALL CALCULATIONS):\n`
+          if (dbUserWithData.settings.birthYear) {
+            const currentYear = new Date().getFullYear()
+            const age = currentYear - dbUserWithData.settings.birthYear
+            userCycleContext += `- Age: ${age} years old (born ${dbUserWithData.settings.birthYear})\n`
+          }
+          const cycleLength = dbUserWithData.settings.averageCycleLength || 28
+          const periodLength = dbUserWithData.settings.averagePeriodLength || dbUserWithData.settings.periodDuration || 5
+          userCycleContext += `- Average Cycle Length: ${cycleLength} days (USE THIS for cycle predictions)\n`
+          userCycleContext += `- Average Period Length: ${periodLength} days (USE THIS for period end date calculations)\n`
+          if (dbUserWithData.settings.lastPeriodDate) {
+            userCycleContext += `- Last Period Date (from settings): ${new Date(dbUserWithData.settings.lastPeriodDate).toLocaleDateString()}\n`
+          }
+          userCycleContext += `- Reminders: ${dbUserWithData.settings.reminderEnabled ? 'Enabled' : 'Disabled'}\n`
+          if (dbUserWithData.settings.reminderEnabled) {
+            userCycleContext += `- Reminder Days Before: ${dbUserWithData.settings.reminderDaysBefore || 3} days\n`
+          }
+          userCycleContext += `- IMPORTANT: These settings are the user's CURRENT preferences. Always use these values (${cycleLength} day cycle, ${periodLength} day period) when calculating predictions, phase information, and period end dates. These settings override any historical averages.\n`
         }
         
-        userCycleContext += `\n\nHOW TO USE THIS DATA FOR PERSONALIZED ADVICE:
-1. Reference her specific patterns when giving advice - "Based on your cycle history..."
-2. Correlate symptoms with her mood patterns - acknowledge if she's been feeling down/anxious
-3. Use her notes to understand personal concerns she's mentioned
-4. Predict based on her cycle: "Your next period is predicted around [date], so you might want to..."
-5. Address her most common symptoms proactively: "Since you frequently experience [symptom], here's how to prepare..."
-6. Consider her mood patterns when providing emotional support
-7. Give advice that's tailored to HER patterns, not generic advice`
+        // Cycle Irregularity Detection
+        if (hasPeriodData && dbUserWithData.periods.length >= 3) {
+          const cycles = []
+          for (let i = 0; i < dbUserWithData.periods.length - 1; i++) {
+            const current = new Date(dbUserWithData.periods[i].startDate)
+            const next = new Date(dbUserWithData.periods[i + 1].startDate)
+            const diff = Math.abs(Math.ceil((current.getTime() - next.getTime()) / (1000 * 60 * 60 * 24)))
+            cycles.push(diff)
+          }
+          
+          if (cycles.length > 0) {
+            const avgCycle = cycles.reduce((a, b) => a + b, 0) / cycles.length
+            const minCycle = Math.min(...cycles)
+            const maxCycle = Math.max(...cycles)
+            const cycleVariation = maxCycle - minCycle
+            
+            userCycleContext += `\n- Cycle Regularity Analysis:\n`
+            userCycleContext += `  • Average cycle: ${Math.round(avgCycle)} days\n`
+            userCycleContext += `  • Cycle range: ${minCycle} to ${maxCycle} days (variation: ${cycleVariation} days)\n`
+            if (cycleVariation > 7) {
+              userCycleContext += `  • NOTE: Cycles are irregular (variation > 7 days). This is common and may affect predictions.\n`
+            }
+          }
+        }
+        
+        // Notes - Personal Concerns and Experiences
+        if (hasNoteData && dbUserWithData.notes) {
+          userCycleContext += `\nPERSONAL NOTES & CONCERNS (${dbUserWithData.notes.length} entries - COMPLETE HISTORY):\n`
+          userCycleContext += `These notes contain personal concerns, experiences, and observations the user has shared:\n`
+          
+          dbUserWithData.notes.forEach((n, idx) => {
+            const noteDate = new Date(n.date).toLocaleDateString()
+            userCycleContext += `  ${idx + 1}. [${noteDate}] ${n.content}\n`
+          })
+          
+          userCycleContext += `- IMPORTANT: Reference these notes to understand what matters to her, what concerns she has, and what she's experiencing. Use this context to provide empathetic, personalized responses.\n`
+        }
+        
+        // Symptom-Mood Correlation
+        if (hasSymptomData && hasMoodData && dbUserWithData.symptoms.length > 0 && dbUserWithData.moods.length > 0) {
+          userCycleContext += `\nSYMPTOM-MOOD CORRELATION ANALYSIS:\n`
+          
+          // Find days where both symptoms and moods were logged
+          const symptomDates = new Set(dbUserWithData.symptoms.map(s => new Date(s.date).toDateString()))
+          const moodDates = new Set(dbUserWithData.moods.map(m => new Date(m.date).toDateString()))
+          const commonDates = [...symptomDates].filter(d => moodDates.has(d))
+          
+          if (commonDates.length > 0) {
+            userCycleContext += `- Days with both symptoms and moods logged: ${commonDates.length}\n`
+            
+            // Analyze correlations on same days
+            commonDates.slice(0, 10).forEach(dateStr => {
+              const date = new Date(dateStr)
+              const daySymptoms = dbUserWithData.symptoms.filter(s => new Date(s.date).toDateString() === dateStr)
+              const dayMoods = dbUserWithData.moods.filter(m => new Date(m.date).toDateString() === dateStr)
+              
+              if (daySymptoms.length > 0 && dayMoods.length > 0) {
+                const avgSeverity = daySymptoms.reduce((sum, s) => sum + s.severity, 0) / daySymptoms.length
+                const symptomTypes = daySymptoms.map(s => `${s.type} (${s.severity}/5)`).join(', ')
+                const moodTypes = dayMoods.map(m => m.type).join(', ')
+                userCycleContext += `  • ${date.toLocaleDateString()}: ${symptomTypes} → Moods: ${moodTypes}\n`
+              }
+            })
+          }
+        }
+        
+        userCycleContext += `\n\nCRITICAL INSTRUCTIONS FOR USING THIS DATA - YOU MUST FOLLOW THESE:\n
+1. **ALWAYS USE ACTUAL USER DATA**: Reference specific dates, patterns, and frequencies from the data above. Don't make generic statements.\n
+2. **IDENTIFY SYMPTOM PATTERNS**: If symptoms correlate with cycle phases (e.g., "cramps during PMS phase"), mention this pattern clearly.\n
+3. **PERSONALIZE PREDICTIONS**: Use her actual cycle history to predict when symptoms might occur next. Say things like "Based on your pattern, you typically experience [symptom] around [specific cycle day]."\n
+4. **CORRELATE SYMPTOMS & MOODS**: If she logged both symptoms and moods on the same days, acknowledge this connection. For example: "I notice when you experience [symptom], you also tend to feel [mood]."\n
+5. **ACKNOWLEDGE TRENDS**: If symptom severity is increasing/decreasing, mention this trend and ask if something has changed.\n
+6. **CYCLE-AWARE ADVICE**: Tailor advice based on where she is in her cycle. If she's in PMS phase and has a history of certain symptoms, mention this.\n
+7. **AGE-APPROPRIATE GUIDANCE**: If age is available, adjust advice accordingly (e.g., different concerns for teens vs adults).\n
+8. **PREVENTIVE SUGGESTIONS**: Based on patterns, suggest proactive measures. For example: "Since you typically get [symptom] during [phase], you might want to [specific action] 2-3 days before."\n
+9. **VALIDATE EXPERIENCES**: Acknowledge her specific symptoms and frequencies. Say "I see you've logged [symptom] [X] times, and it's been [trend]."\n
+10. **USE ALL DATA POINTS**: Reference periods, symptoms, moods, and notes together to give comprehensive advice. Don't ignore any data category.\n
+11. **BE SPECIFIC**: Instead of "your cycle," say "your [X]-day cycle" or "your period that started on [date]."\n
+12. **IDENTIFY PATTERNS FIRST**: When user asks about symptoms, first check if they've logged similar symptoms before and in which cycle phase.\n
+13. **PERSONALIZE EVERYTHING**: Every response should reference her specific data when available. Generic advice is only acceptable if no data exists.`
       } else {
         userCycleContext += `\n\nIMPORTANT: The user has NOT entered any data in the app yet (no periods, symptoms, moods, or notes tracked). If they ask about their personal patterns, cycle predictions, or their own symptoms, you should say: "I notice you haven't updated your period and symptom information in the app yet. To give you personalized insights about your cycle patterns and provide advice tailored specifically to you, please log your periods, symptoms, moods, and notes in the app first. However, I'm still here to help you with tips and guidance for what you're experiencing right now!"`
       }
