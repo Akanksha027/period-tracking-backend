@@ -139,7 +139,7 @@ async function findUserByEmail(email) {
         let allUsers = await clerk.users.getUserList({ limit: 500 })
         console.log('[Login For Other] Total users retrieved for manual search:', allUsers?.data?.length || 0)
         
-                if (allUsers?.data && allUsers.data.length > 0) {
+        if (allUsers?.data && allUsers.data.length > 0) {
           // Search through all emails (primary and secondary)
           const matchedUser = allUsers.data.find(user => {
             if (!user.emailAddresses || user.emailAddresses.length === 0) return false
