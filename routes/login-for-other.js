@@ -33,16 +33,72 @@ function generateOTP() {
 }
 
 /**
- * Send OTP email using EmailJS (free, no domain required)
- * Get credentials from: https://www.emailjs.com/
+ * Send OTP email using Gmail SMTP (free, no domain required)
+ * Requires Gmail App Password - see: https://support.google.com/accounts/answer/185833
  */
 async function sendOTPEmail(email, otp) {
+  const gmailUser = process.env.GMAIL_USER
+  const gmailPassword = process.env.GMAIL_APP_PASSWORD
+
+  // Try Gmail SMTP first (free, no domain required)
+  console.log('[OTP EMAIL] Checking Gmail SMTP configuration:', {
+    hasGmailUser: !!gmailUser,
+    hasGmailPassword: !!gmailPassword,
+  })
+
+  if (gmailUser && gmailPassword) {
+    try {
+      console.log('[OTP EMAIL] Attempting to send via Gmail SMTP...')
+      const nodemailer = await import('nodemailer')
+      
+      const transporter = nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+          user: gmailUser,
+          pass: gmailPassword,
+        },
+      })
+
+      const mailOptions = {
+        from: gmailUser,
+        to: email,
+        subject: 'Login Verification Code - Period Tracker',
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #333;">Login Verification Code</h2>
+            <p>Your verification code for "Login for Someone Else" is:</p>
+            <div style="background-color: #f4f4f4; padding: 20px; text-align: center; margin: 20px 0; border-radius: 5px;">
+              <h1 style="color: #0066cc; font-size: 32px; margin: 0; letter-spacing: 5px;">${otp}</h1>
+            </div>
+            <p style="color: #666; font-size: 14px;">This code expires in 10 minutes.</p>
+            <p style="color: #666; font-size: 14px;">If you didn't request this code, please ignore this email.</p>
+          </div>
+        `,
+        text: `Your verification code is: ${otp}\n\nThis code expires in 10 minutes.\n\nIf you didn't request this, please ignore this email.`,
+      }
+
+      const info = await transporter.sendMail(mailOptions)
+      
+      console.log('[OTP EMAIL] ✅ Sent successfully via Gmail SMTP. Message ID:', info.messageId)
+      return
+    } catch (error) {
+      console.error('[OTP EMAIL] Gmail SMTP error:', error)
+      console.error('[OTP EMAIL] Error details:', {
+        message: error?.message,
+        code: error?.code,
+      })
+      // Fall through to other methods
+    }
+  } else {
+    console.log('[OTP EMAIL] ⚠️  Gmail SMTP not configured')
+  }
+
+  // Legacy: EmailJS (only works in browser, not server-side)
   const emailjsServiceId = process.env.EMAILJS_SERVICE_ID
   const emailjsTemplateId = process.env.EMAILJS_TEMPLATE_ID
   const emailjsPublicKey = process.env.EMAILJS_PUBLIC_KEY
 
-  // Try EmailJS first (no domain required)
-  console.log('[OTP EMAIL] Checking EmailJS configuration:', {
+  console.log('[OTP EMAIL] Checking EmailJS configuration (browser-only, will skip):', {
     hasServiceId: !!emailjsServiceId,
     hasTemplateId: !!emailjsTemplateId,
     hasPublicKey: !!emailjsPublicKey,
