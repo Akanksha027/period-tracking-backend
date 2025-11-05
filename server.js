@@ -22,6 +22,36 @@ app.use((req, res, next) => {
   next()
 })
 
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({
+    name: 'Period Tracker Backend API',
+    version: '1.0.0',
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      health: '/health',
+      auth: {
+        signup: 'POST /api/auth/signup',
+        login: 'POST /api/auth/login',
+        refresh: 'POST /api/auth/refresh',
+        logout: 'POST /api/auth/logout',
+        me: 'GET /api/auth/me',
+      },
+      user: {
+        get: 'GET /api/user',
+        update: 'PATCH /api/user',
+      },
+      loginForOther: {
+        checkEmail: 'POST /api/login-for-other/check-email',
+        sendOtp: 'POST /api/login-for-other/send-otp',
+        verifyOtp: 'POST /api/login-for-other/verify-otp',
+        completeLogin: 'POST /api/login-for-other/complete-login',
+      },
+    },
+  })
+})
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() })
