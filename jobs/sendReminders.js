@@ -225,8 +225,22 @@ export async function sendRemindersToUsers() {
 
         if (lastReminder) {
           const hoursSinceLastReminder = (Date.now() - new Date(lastReminder.sentAt).getTime()) / (1000 * 60 * 60)
+          // Check if reminder was sent in last 3 hours (to allow multiple reminders per day)
           if (hoursSinceLastReminder < 3) {
             console.log(`[Reminder Job] Skipping user ${user.id} - reminder sent ${hoursSinceLastReminder.toFixed(1)} hours ago`)
+            results.skipped++
+            continue
+          }
+        }
+        
+        // Also check if reminder was sent today (for daily cron - prevent duplicates)
+        const todayCheck = new Date()
+        todayCheck.setHours(0, 0, 0, 0)
+        const lastReminderDate = lastReminder ? new Date(lastReminder.sentAt) : null
+        if (lastReminderDate) {
+          lastReminderDate.setHours(0, 0, 0, 0)
+          if (lastReminderDate.getTime() === todayCheck.getTime()) {
+            console.log(`[Reminder Job] Skipping user ${user.id} - reminder already sent today`)
             results.skipped++
             continue
           }
