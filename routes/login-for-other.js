@@ -40,17 +40,21 @@ function generateOTP() {
 async function sendOTPEmail(email, otp) {
   const resendApiKey = process.env.RESEND_API_KEY
   
-  // If Resend is not configured, log to console (for development)
-  if (!resendApiKey) {
+  // Check if Resend is configured with a real API key
+  if (!resendApiKey || resendApiKey.includes('xxxxxxxx') || resendApiKey === 're_xxxxxxxxxxxxxxxxxxxxx') {
     console.log('='.repeat(80))
-    console.log('[OTP EMAIL - NOT SENT - RESEND_API_KEY not configured]')
+    console.log('[OTP EMAIL - NOT SENT - RESEND_API_KEY not configured or is placeholder]')
     console.log(`To: ${email}`)
     console.log(`Subject: Login Verification Code - Period Tracker`)
     console.log(`Your verification code is: ${otp}`)
     console.log(`This code expires in 10 minutes.`)
     console.log('='.repeat(80))
-    console.log('⚠️  To enable email sending, add RESEND_API_KEY to your environment variables')
-    console.log('   Get your API key from: https://resend.com/api-keys')
+    console.log('⚠️  To enable email sending:')
+    console.log('   1. Go to https://resend.com and sign up (free tier: 100 emails/day)')
+    console.log('   2. Go to https://resend.com/api-keys and create a new API key')
+    console.log('   3. Copy the API key (starts with re_...)')
+    console.log('   4. Add it to Vercel environment variables as RESEND_API_KEY')
+    console.log('   5. Redeploy your application')
     return
   }
 
