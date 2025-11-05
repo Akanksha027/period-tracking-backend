@@ -87,7 +87,18 @@ async function findUserByEmail(email) {
           hasData: !!users?.data,
           dataLength: users?.data?.length || 0,
           totalCount: users?.totalCount || 0,
-        }))
+          firstUserEmail: users?.data?.[0]?.emailAddresses?.[0]?.emailAddress || 'none',
+        }, null, 2))
+        
+        // Also log the raw response (truncated if too long)
+        if (users) {
+          const responseStr = JSON.stringify(users, null, 2)
+          if (responseStr.length > 1000) {
+            console.log('[Login For Other] Full Clerk response (first 1000 chars):', responseStr.substring(0, 1000))
+          } else {
+            console.log('[Login For Other] Full Clerk response:', responseStr)
+          }
+        }
       } catch (filterError) {
         console.log('[Login For Other] EmailAddress filter failed, trying without filter:', filterError.message)
         users = null
@@ -140,15 +151,21 @@ async function findUserByEmail(email) {
         console.log('[Login For Other] Total users retrieved for manual search:', allUsers?.data?.length || 0)
         
         if (allUsers?.data && allUsers.data.length > 0) {
+          console.log('[Login For Other] Starting manual search through', allUsers.data.length, 'users')
           // Search through all emails (primary and secondary)
+          let checkedCount = 0
           const matchedUser = allUsers.data.find(user => {
             if (!user.emailAddresses || user.emailAddresses.length === 0) return false
             return user.emailAddresses.some(emailObj => {
               const emailAddr = emailObj?.emailAddress?.toLowerCase()?.trim()
-              console.log('[Login For Other] Checking email:', emailAddr, 'against:', normalizedEmail)
+              checkedCount++
+              if (checkedCount <= 5 || emailAddr === normalizedEmail) {
+                console.log('[Login For Other] Checking email:', emailAddr, 'against:', normalizedEmail, 'Match:', emailAddr === normalizedEmail)
+              }
               return emailAddr === normalizedEmail
             })
           })
+          console.log('[Login For Other] Manual search completed. Checked', checkedCount, 'email addresses. Found match:', !!matchedUser)
 
           if (matchedUser) {
             const userEmail = matchedUser.emailAddresses?.[0]?.emailAddress || normalizedEmail
