@@ -127,19 +127,19 @@ async function findUserByEmail(email) {
 
 /**
  * POST /api/login-for-other/verify-credentials
- * Verify email and password credentials
+ * Verify email exists (password not required for "login for someone else" flow)
  */
 router.post('/verify-credentials', async (req, res) => {
   try {
-    const { email, password } = req.body
+    const { email } = req.body
 
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' }) 
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' }) 
     }
 
-    console.log('[Login For Other] Verifying credentials for email:', email)
+    console.log('[Login For Other] Checking if email exists:', email)
 
-    // Check if user exists in Supabase Auth
+    // Check if user exists in Clerk (no password required)
     const user = await findUserByEmail(email)
 
     if (!user) {
@@ -152,13 +152,7 @@ router.post('/verify-credentials', async (req, res) => {
 
     console.log('[Login For Other] User found:', user.id, user.email)
 
-    // Note: Clerk doesn't support backend password verification for security reasons.
-    // Password verification must be done on the frontend using Clerk's signIn.create().
-    // Here we just verify the user exists in Clerk.
-    // The frontend should verify credentials before calling this endpoint.
-
-    // Credentials are valid (user exists in Clerk)
-    // Frontend has already verified the password using Clerk
+    // User exists in Clerk - ready for OTP verification
     console.log('[Login For Other] User exists in Clerk - ready for OTP')
     res.json({
       success: true,
