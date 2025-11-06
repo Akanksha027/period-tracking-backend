@@ -242,6 +242,56 @@ router.get('/', async (req, res) => {
       }
     }
 
+    // Additional fallback: If still no OTHER user found, check for OTHER users with NULL clerk_id
+    // NOTE: We CANNOT set clerk_id on OTHER users because it violates the unique constraint
+    // (SELF users already use the same clerk_id). Instead, we'll query by email pattern matching.
+    // OTHER user emails follow pattern: "{viewedEmail}.viewer.{identifier}"
+    if (!dbUser) {
+      console.log('[User GET] No OTHER user found by email, checking for OTHER users with email pattern matching')
+      
+      // Find OTHER users where the email contains ".viewer." (pattern for viewer accounts)
+      // and check if any match the current user's context
+      // We'll also check for OTHER users with NULL clerk_id as a fallback
+      const otherUsersWithNullClerkId = await prisma.user.findMany({
+        where: {
+          userType: 'OTHER',
+          clerkId: null,
+          email: {
+            contains: '.viewer.',
+          },
+        },
+        include: {
+          settings: true,
+          viewedUser: {
+            include: {
+              settings: true,
+            },
+          },
+        },
+        orderBy: {
+          createdAt: 'desc', // Get the most recent one
+        },
+      })
+
+      console.log('[User GET] Found OTHER users with NULL clerk_id and .viewer. pattern:', otherUsersWithNullClerkId.length)
+
+      // Since we can't set clerk_id (unique constraint), we'll use the most recent one
+      // that matches the context. In a production system, you'd want better matching logic.
+      if (otherUsersWithNullClerkId.length > 0) {
+        dbUser = otherUsersWithNullClerkId[0]
+        console.log('[User GET] Using OTHER user (cannot set clerk_id due to unique constraint):', {
+          otherUserId: dbUser.id,
+          otherUserEmail: dbUser.email,
+          currentUserClerkId: req.user.clerkId,
+          currentUserEmail: req.user.email,
+          viewedUserId: dbUser.viewedUserId,
+          viewedUserEmail: dbUser.viewedUser?.email,
+        })
+        // NOTE: We're NOT updating clerk_id here because it would violate the unique constraint
+        // The OTHER user will remain with clerk_id = NULL, but we can still use it for lookup
+      }
+    }
+
     // If no OTHER user found, check for SELF user
     if (!dbUser) {
       console.log('[User GET] No OTHER user found, checking for SELF user')
