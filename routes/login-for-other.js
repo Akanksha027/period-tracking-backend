@@ -1308,32 +1308,77 @@ router.post('/complete-login', async (req, res) => {
     }
 
     // Create or find the OTHER user (viewer)
-    // For now, we'll use a unique identifier or create a viewer account
-    // The viewerIdentifier can be a device ID, session ID, or viewer's email
-    const viewerEmail = viewerIdentifier 
-      ? `${normalizedEmail}.viewer.${viewerIdentifier}`.toLowerCase()
-      : `${normalizedEmail}.viewer.${Date.now()}`.toLowerCase()
+    // Try to get the viewer's Clerk ID from the request (if they're logged in)
+    // The viewer should be logged in with Clerk to access this endpoint
+    let viewerClerkId = null
+    try {
+      // Try to get Clerk ID from authorization header
+      const authHeader = req.headers.authorization
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.substring(7)
+        const jwt = require('jsonwebtoken')
+        const decoded = jwt.decode(token, { complete: true })
+        if (decoded && decoded.payload && decoded.payload.sub) {
+          viewerClerkId = decoded.payload.sub
+        }
+      }
+    } catch (error) {
+      console.log('[Login For Other] Could not extract viewer Clerk ID:', error.message)
+    }
 
-    let otherUser = await prisma.user.findFirst({
-      where: {
-        viewedUserId: selfUser.id,
-        userType: 'OTHER',
-      },
-      // If viewerIdentifier provided, we could match by that
-      // For now, create a new viewer session each time
-    })
+    // Try to find existing OTHER user for this viewer (by clerkId if available, or by viewedUserId)
+    let otherUser = null
+    if (viewerClerkId) {
+      // First, try to find by clerkId
+      otherUser = await prisma.user.findFirst({
+        where: {
+          clerkId: viewerClerkId,
+          userType: 'OTHER',
+          viewedUserId: selfUser.id,
+        },
+      })
+    }
 
-    // Create new OTHER user for this viewing session
-    // Note: Each viewer session creates a new OTHER user record
-    // In production, you might want to reuse existing OTHER users based on viewerIdentifier
-    otherUser = await prisma.user.create({
-      data: {
-        email: viewerEmail, // Unique email for this viewer
-        userType: 'OTHER',
-        viewedUserId: selfUser.id, // Link to the SELF user they're viewing
-        name: `Viewer for ${selfUser.email}`,
-      },
-    })
+    // If not found, try to find any OTHER user viewing this SELF user (without clerkId)
+    if (!otherUser) {
+      otherUser = await prisma.user.findFirst({
+        where: {
+          viewedUserId: selfUser.id,
+          userType: 'OTHER',
+          clerkId: null, // Only get ones without clerkId
+        },
+        orderBy: {
+          createdAt: 'desc', // Get the most recent one
+        },
+      })
+    }
+
+    // If still not found, create a new OTHER user
+    if (!otherUser) {
+      const viewerEmail = viewerClerkId 
+        ? `${normalizedEmail}.viewer.${viewerClerkId}`.toLowerCase()
+        : viewerIdentifier 
+        ? `${normalizedEmail}.viewer.${viewerIdentifier}`.toLowerCase()
+        : `${normalizedEmail}.viewer.${Date.now()}`.toLowerCase()
+
+      otherUser = await prisma.user.create({
+        data: {
+          email: viewerEmail,
+          clerkId: viewerClerkId, // Link to viewer's Clerk ID if available
+          userType: 'OTHER',
+          viewedUserId: selfUser.id, // Link to the SELF user they're viewing
+          name: `Viewer for ${selfUser.email}`,
+        },
+      })
+    } else if (viewerClerkId && !otherUser.clerkId) {
+      // Update existing OTHER user with Clerk ID if we have it
+      otherUser = await prisma.user.update({
+        where: { id: otherUser.id },
+        data: {
+          clerkId: viewerClerkId,
+        },
+      })
+    }
 
     // Clean up the OTP record
     await prisma.otpCode.delete({

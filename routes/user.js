@@ -179,7 +179,7 @@ router.get('/', async (req, res) => {
       },
     })
 
-    // If user doesn't exist in database, create them
+    // If user doesn't exist, create a new SELF user (default behavior)
     if (!dbUser) {
       const userName = req.user.firstName || req.user.lastName
         ? `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim()
@@ -221,6 +221,7 @@ router.get('/', async (req, res) => {
         name: dbUser.name,
         clerkId: dbUser.clerkId,
         userType: dbUser.userType,
+        viewedUserId: dbUser.viewedUserId,
         createdAt: dbUser.createdAt,
         updatedAt: dbUser.updatedAt,
         settings: dbUser.settings,
