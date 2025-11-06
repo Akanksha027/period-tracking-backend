@@ -1314,43 +1314,85 @@ router.post('/complete-login', async (req, res) => {
     try {
       // Try to get Clerk ID from authorization header
       const authHeader = req.headers.authorization
+      console.log('[Login For Other] Authorization header present:', !!authHeader)
       if (authHeader && authHeader.startsWith('Bearer ')) {
         const token = authHeader.substring(7)
         const jwt = require('jsonwebtoken')
         const decoded = jwt.decode(token, { complete: true })
+        console.log('[Login For Other] JWT decoded:', {
+          hasPayload: !!decoded?.payload,
+          hasSub: !!decoded?.payload?.sub,
+          sub: decoded?.payload?.sub,
+        })
         if (decoded && decoded.payload && decoded.payload.sub) {
           viewerClerkId = decoded.payload.sub
+          console.log('[Login For Other] Extracted viewer Clerk ID:', viewerClerkId)
+        } else {
+          console.warn('[Login For Other] JWT token does not contain sub claim')
         }
+      } else {
+        console.warn('[Login For Other] No authorization header or invalid format')
       }
     } catch (error) {
-      console.log('[Login For Other] Could not extract viewer Clerk ID:', error.message)
+      console.error('[Login For Other] Error extracting viewer Clerk ID:', error)
+      console.error('[Login For Other] Error details:', error.message, error.stack)
     }
 
     // Try to find existing OTHER user for this viewer (by clerkId if available, or by viewedUserId)
     let otherUser = null
+    console.log('[Login For Other] Searching for existing OTHER user:', {
+      viewerClerkId,
+      viewedUserId: selfUser.id,
+    })
+    
     if (viewerClerkId) {
-      // First, try to find by clerkId
+      // First, try to find by clerkId (this is the primary lookup - viewer's Clerk ID)
       otherUser = await prisma.user.findFirst({
         where: {
           clerkId: viewerClerkId,
           userType: 'OTHER',
-          viewedUserId: selfUser.id,
         },
       })
+      console.log('[Login For Other] Found OTHER user by clerkId:', !!otherUser, otherUser?.id)
+      
+      // If found, check if it's viewing the same SELF user, or update it
+      if (otherUser) {
+        if (otherUser.viewedUserId !== selfUser.id) {
+          // Update existing OTHER user to view this SELF user instead
+          console.log('[Login For Other] Updating existing OTHER user to view different SELF user')
+          otherUser = await prisma.user.update({
+            where: { id: otherUser.id },
+            data: {
+              viewedUserId: selfUser.id,
+            },
+          })
+        }
+      }
     }
 
-    // If not found, try to find any OTHER user viewing this SELF user (without clerkId)
+    // If not found and we have viewerClerkId, try to find any OTHER user viewing this SELF user (but prefer updating to use viewerClerkId)
     if (!otherUser) {
       otherUser = await prisma.user.findFirst({
         where: {
           viewedUserId: selfUser.id,
           userType: 'OTHER',
-          clerkId: null, // Only get ones without clerkId
         },
         orderBy: {
           createdAt: 'desc', // Get the most recent one
         },
       })
+      console.log('[Login For Other] Found OTHER user by viewedUserId:', !!otherUser, otherUser?.id)
+      
+      // If found but doesn't have clerkId, update it
+      if (otherUser && viewerClerkId && !otherUser.clerkId) {
+        console.log('[Login For Other] Updating existing OTHER user with Clerk ID')
+        otherUser = await prisma.user.update({
+          where: { id: otherUser.id },
+          data: {
+            clerkId: viewerClerkId,
+          },
+        })
+      }
     }
 
     // If still not found, create a new OTHER user
@@ -1361,6 +1403,12 @@ router.post('/complete-login', async (req, res) => {
         ? `${normalizedEmail}.viewer.${viewerIdentifier}`.toLowerCase()
         : `${normalizedEmail}.viewer.${Date.now()}`.toLowerCase()
 
+      console.log('[Login For Other] Creating new OTHER user:', {
+        email: viewerEmail,
+        clerkId: viewerClerkId,
+        viewedUserId: selfUser.id,
+      })
+
       otherUser = await prisma.user.create({
         data: {
           email: viewerEmail,
@@ -1370,15 +1418,26 @@ router.post('/complete-login', async (req, res) => {
           name: `Viewer for ${selfUser.email}`,
         },
       })
+      console.log('[Login For Other] Created OTHER user:', otherUser.id)
     } else if (viewerClerkId && !otherUser.clerkId) {
       // Update existing OTHER user with Clerk ID if we have it
+      console.log('[Login For Other] Updating existing OTHER user with Clerk ID:', viewerClerkId)
       otherUser = await prisma.user.update({
         where: { id: otherUser.id },
         data: {
           clerkId: viewerClerkId,
         },
       })
+      console.log('[Login For Other] Updated OTHER user:', otherUser.id)
     }
+    
+    console.log('[Login For Other] Final OTHER user:', {
+      id: otherUser.id,
+      email: otherUser.email,
+      clerkId: otherUser.clerkId,
+      viewedUserId: otherUser.viewedUserId,
+      userType: otherUser.userType,
+    })
 
     // Clean up the OTP record
     await prisma.otpCode.delete({
