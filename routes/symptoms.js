@@ -73,14 +73,30 @@ async function verifyClerkAuth(req, res, next) {
 router.use(verifyClerkAuth)
 
 async function getDbUserId(req) {
+  // IMPORTANT: Check for OTHER users first (viewers take precedence)
   let dbUser = await prisma.user.findFirst({
     where: {
-      OR: [
-        { clerkId: req.user.clerkId },
-        { email: req.user.email },
-      ],
+      clerkId: req.user.clerkId,
+      userType: 'OTHER',
     },
   })
+
+  // If OTHER user found, return the viewedUserId (the SELF user's ID they're viewing)
+  if (dbUser && dbUser.userType === 'OTHER' && dbUser.viewedUserId) {
+    return dbUser.viewedUserId
+  }
+
+  // If no OTHER user found, check for SELF user
+  if (!dbUser) {
+    dbUser = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { clerkId: req.user.clerkId },
+          { email: req.user.email },
+        ],
+      },
+    })
+  }
 
   if (!dbUser) {
     dbUser = await prisma.user.create({

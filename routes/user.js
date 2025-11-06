@@ -166,18 +166,73 @@ router.use(verifyClerkAuth)
  */
 router.get('/', async (req, res) => {
   try {
-    // Find or create user in database by Clerk ID
+    // IMPORTANT: Check for OTHER users first (viewers take precedence)
+    // If a user has logged in "for someone else", they should see that data, not their own
     let dbUser = await prisma.user.findFirst({
       where: {
-        OR: [
-          { clerkId: req.user.clerkId },
-          { email: req.user.email },
-        ],
+        clerkId: req.user.clerkId,
+        userType: 'OTHER', // Check for OTHER users first by Clerk ID
       },
       include: {
         settings: true,
+        viewedUser: {
+          include: {
+            settings: true,
+          },
+        },
       },
     })
+
+    // If no OTHER user found by Clerk ID, check by email (for cases where clerkId wasn't set)
+    if (!dbUser) {
+      dbUser = await prisma.user.findFirst({
+        where: {
+          email: req.user.email,
+          userType: 'OTHER',
+        },
+        include: {
+          settings: true,
+          viewedUser: {
+            include: {
+              settings: true,
+            },
+          },
+        },
+      })
+      
+      // If found by email, update it with Clerk ID
+      if (dbUser && !dbUser.clerkId) {
+        dbUser = await prisma.user.update({
+          where: { id: dbUser.id },
+          data: {
+            clerkId: req.user.clerkId,
+          },
+          include: {
+            settings: true,
+            viewedUser: {
+              include: {
+                settings: true,
+              },
+            },
+          },
+        })
+      }
+    }
+
+    // If no OTHER user found, check for SELF user
+    if (!dbUser) {
+      dbUser = await prisma.user.findFirst({
+        where: {
+          OR: [
+            { clerkId: req.user.clerkId },
+            { email: req.user.email },
+          ],
+        },
+        include: {
+          settings: true,
+        },
+      })
+    }
 
     // If user doesn't exist, create a new SELF user (default behavior)
     if (!dbUser) {
@@ -209,6 +264,32 @@ router.get('/', async (req, res) => {
         },
         include: {
           settings: true,
+        },
+      })
+    }
+
+    // If this is an OTHER user, we need to return the viewed user's data
+    // but keep the OTHER user's ID and userType for context
+    if (dbUser.userType === 'OTHER' && dbUser.viewedUser) {
+      // Return the OTHER user's info, but the response should indicate
+      // that data operations should use viewedUserId
+      return res.json({
+        message: 'User profile retrieved (viewing for someone else)',
+        user: {
+          id: dbUser.id, // Keep the OTHER user's ID
+          email: dbUser.email,
+          name: dbUser.name,
+          clerkId: dbUser.clerkId,
+          userType: dbUser.userType,
+          viewedUserId: dbUser.viewedUserId,
+          viewedUser: {
+            id: dbUser.viewedUser.id,
+            email: dbUser.viewedUser.email,
+            name: dbUser.viewedUser.name,
+          },
+          createdAt: dbUser.createdAt,
+          updatedAt: dbUser.updatedAt,
+          settings: dbUser.viewedUser.settings, // Return viewed user's settings
         },
       })
     }
@@ -309,18 +390,72 @@ router.patch('/', async (req, res) => {
  */
 router.get('/settings', async (req, res) => {
   try {
-    // Find user in database
+    // IMPORTANT: Check for OTHER users first (viewers take precedence)
     let dbUser = await prisma.user.findFirst({
       where: {
-        OR: [
-          { clerkId: req.user.clerkId },
-          { email: req.user.email },
-        ],
+        clerkId: req.user.clerkId,
+        userType: 'OTHER',
       },
       include: {
         settings: true,
+        viewedUser: {
+          include: {
+            settings: true,
+          },
+        },
       },
     })
+    
+    // If no OTHER user found by Clerk ID, check by email
+    if (!dbUser) {
+      dbUser = await prisma.user.findFirst({
+        where: {
+          email: req.user.email,
+          userType: 'OTHER',
+        },
+        include: {
+          settings: true,
+          viewedUser: {
+            include: {
+              settings: true,
+            },
+          },
+        },
+      })
+      
+      // If found by email, update it with Clerk ID
+      if (dbUser && !dbUser.clerkId) {
+        dbUser = await prisma.user.update({
+          where: { id: dbUser.id },
+          data: {
+            clerkId: req.user.clerkId,
+          },
+          include: {
+            settings: true,
+            viewedUser: {
+              include: {
+                settings: true,
+              },
+            },
+          },
+        })
+      }
+    }
+    
+    // If no OTHER user found, check for SELF user
+    if (!dbUser) {
+      dbUser = await prisma.user.findFirst({
+        where: {
+          OR: [
+            { clerkId: req.user.clerkId },
+            { email: req.user.email },
+          ],
+        },
+        include: {
+          settings: true,
+        },
+      })
+    }
 
     // If user doesn't exist, create them (similar to PATCH endpoint)
     if (!dbUser) {
@@ -342,6 +477,22 @@ router.get('/settings', async (req, res) => {
         },
       })
       console.log('[User Settings] User created in GET:', dbUser.id)
+    }
+
+    // For OTHER users, use viewed user's settings
+    if (dbUser.userType === 'OTHER' && dbUser.viewedUser) {
+      // Create settings if they don't exist for viewed user
+      if (!dbUser.viewedUser.settings) {
+        dbUser.viewedUser.settings = await prisma.userSettings.create({
+          data: {
+            userId: dbUser.viewedUser.id,
+          },
+        })
+      }
+      return res.json({
+        success: true,
+        settings: dbUser.viewedUser.settings,
+      })
     }
 
     // Create settings if they don't exist

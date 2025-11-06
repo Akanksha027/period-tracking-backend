@@ -118,17 +118,34 @@ async function getDbUserId(req) {
     email: req.user?.email,
   })
 
-  // Find or create user in database
+  // IMPORTANT: Check for OTHER users first (viewers take precedence)
+  // If a user has logged in "for someone else", they should see that data, not their own
   let dbUser = await prisma.user.findFirst({
     where: {
-      OR: [
-        { clerkId: req.user.clerkId },
-        { email: req.user.email },
-      ],
+      clerkId: req.user.clerkId,
+      userType: 'OTHER', // Check for OTHER users first
     },
   })
 
-  console.log('[Periods] getDbUserId - Found user:', dbUser ? { id: dbUser.id, email: dbUser.email } : 'Not found')
+  // If OTHER user found, return the viewedUserId (the SELF user's ID they're viewing)
+  if (dbUser && dbUser.userType === 'OTHER' && dbUser.viewedUserId) {
+    console.log('[Periods] getDbUserId - Found OTHER user, using viewedUserId:', dbUser.viewedUserId)
+    return dbUser.viewedUserId
+  }
+
+  // If no OTHER user found, check for SELF user
+  if (!dbUser) {
+    dbUser = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { clerkId: req.user.clerkId },
+          { email: req.user.email },
+        ],
+      },
+    })
+  }
+
+  console.log('[Periods] getDbUserId - Found user:', dbUser ? { id: dbUser.id, email: dbUser.email, userType: dbUser.userType } : 'Not found')
 
   if (!dbUser) {
     console.log('[Periods] getDbUserId - Creating new user...')

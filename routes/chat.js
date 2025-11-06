@@ -116,9 +116,29 @@ async function verifyClerkAuth(req, res, next) {
  */
 async function findUserByClerkId(clerkId) {
   try {
-    const user = await prisma.user.findFirst({
-      where: { clerkId },
+    // Check for OTHER users first
+    let user = await prisma.user.findFirst({
+      where: { 
+        clerkId,
+        userType: 'OTHER',
+      },
+      include: {
+        viewedUser: true,
+      },
     })
+    
+    // If OTHER user found, return the viewed user (the SELF user)
+    if (user && user.userType === 'OTHER' && user.viewedUser) {
+      return user.viewedUser
+    }
+    
+    // If no OTHER user, check for SELF user
+    if (!user) {
+      user = await prisma.user.findFirst({
+        where: { clerkId },
+      })
+    }
+    
     return user
   } catch (error) {
     console.error('[Chat] Error finding user:', error)
