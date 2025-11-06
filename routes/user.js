@@ -166,6 +166,11 @@ router.use(verifyClerkAuth)
  */
 router.get('/', async (req, res) => {
   try {
+    console.log('[User GET] Checking for user:', {
+      clerkId: req.user.clerkId,
+      email: req.user.email,
+    })
+
     // IMPORTANT: Check for OTHER users first (viewers take precedence)
     // If a user has logged in "for someone else", they should see that data, not their own
     let dbUser = await prisma.user.findFirst({
@@ -183,8 +188,16 @@ router.get('/', async (req, res) => {
       },
     })
 
+    console.log('[User GET] Found OTHER user by clerkId:', {
+      found: !!dbUser,
+      id: dbUser?.id,
+      email: dbUser?.email,
+      viewedUserId: dbUser?.viewedUserId,
+    })
+
     // If no OTHER user found by Clerk ID, check by email (for cases where clerkId wasn't set)
     if (!dbUser) {
+      console.log('[User GET] No OTHER user found by clerkId, checking by email:', req.user.email)
       dbUser = await prisma.user.findFirst({
         where: {
           email: req.user.email,
@@ -200,8 +213,17 @@ router.get('/', async (req, res) => {
         },
       })
       
+      console.log('[User GET] Found OTHER user by email:', {
+        found: !!dbUser,
+        id: dbUser?.id,
+        email: dbUser?.email,
+        clerkId: dbUser?.clerkId,
+        viewedUserId: dbUser?.viewedUserId,
+      })
+      
       // If found by email, update it with Clerk ID
       if (dbUser && !dbUser.clerkId) {
+        console.log('[User GET] Updating OTHER user with Clerk ID:', req.user.clerkId)
         dbUser = await prisma.user.update({
           where: { id: dbUser.id },
           data: {
@@ -216,11 +238,13 @@ router.get('/', async (req, res) => {
             },
           },
         })
+        console.log('[User GET] Updated OTHER user:', dbUser.id)
       }
     }
 
     // If no OTHER user found, check for SELF user
     if (!dbUser) {
+      console.log('[User GET] No OTHER user found, checking for SELF user')
       dbUser = await prisma.user.findFirst({
         where: {
           OR: [
@@ -232,10 +256,17 @@ router.get('/', async (req, res) => {
           settings: true,
         },
       })
+      console.log('[User GET] Found SELF user:', {
+        found: !!dbUser,
+        id: dbUser?.id,
+        email: dbUser?.email,
+        userType: dbUser?.userType,
+      })
     }
 
     // If user doesn't exist, create a new SELF user (default behavior)
     if (!dbUser) {
+      console.log('[User GET] No user found, creating new SELF user')
       const userName = req.user.firstName || req.user.lastName
         ? `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim()
         : null
@@ -271,6 +302,11 @@ router.get('/', async (req, res) => {
     // If this is an OTHER user, we need to return the viewed user's data
     // but keep the OTHER user's ID and userType for context
     if (dbUser.userType === 'OTHER' && dbUser.viewedUser) {
+      console.log('[User GET] Returning OTHER user data for viewed user:', {
+        otherUserId: dbUser.id,
+        viewedUserId: dbUser.viewedUser.id,
+        viewedUserEmail: dbUser.viewedUser.email,
+      })
       // Return the OTHER user's info, but the response should indicate
       // that data operations should use viewedUserId
       return res.json({
@@ -293,6 +329,12 @@ router.get('/', async (req, res) => {
         },
       })
     }
+
+    console.log('[User GET] Returning SELF user data:', {
+      userId: dbUser.id,
+      email: dbUser.email,
+      userType: dbUser.userType,
+    })
 
     res.json({
       message: 'User profile retrieved',

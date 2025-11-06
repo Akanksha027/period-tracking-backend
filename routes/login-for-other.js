@@ -1444,6 +1444,14 @@ router.post('/complete-login', async (req, res) => {
       where: { id: otpData.id },
     })
 
+    console.log('[Login For Other] ✅ Login completed successfully:', {
+      otherUserId: otherUser.id,
+      otherUserEmail: otherUser.email,
+      otherUserClerkId: otherUser.clerkId,
+      viewedUserId: selfUser.id,
+      viewedUserEmail: selfUser.email,
+    })
+
     res.json({
       success: true,
       message: 'Login completed successfully. You can now view the account data.',
@@ -1452,6 +1460,7 @@ router.post('/complete-login', async (req, res) => {
         userType: 'OTHER',
         viewedUserId: selfUser.id,
         viewedUserEmail: selfUser.email,
+        clerkId: otherUser.clerkId, // Include clerkId in response for debugging
       },
       selfUser: {
         id: selfUser.id,
