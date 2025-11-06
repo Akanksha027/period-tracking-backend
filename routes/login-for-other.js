@@ -3,6 +3,7 @@ import { supabase, supabaseAdmin } from '../lib/supabase.js'
 import { clerk } from '../lib/clerk.js'
 import prisma from '../lib/prisma.js'
 import crypto from 'crypto'
+import jwt from 'jsonwebtoken'
 
 const router = express.Router()
 
@@ -1317,7 +1318,6 @@ router.post('/complete-login', async (req, res) => {
       console.log('[Login For Other] Authorization header present:', !!authHeader)
       if (authHeader && authHeader.startsWith('Bearer ')) {
         const token = authHeader.substring(7)
-        const jwt = require('jsonwebtoken')
         const decoded = jwt.decode(token, { complete: true })
         console.log('[Login For Other] JWT decoded:', {
           hasPayload: !!decoded?.payload,

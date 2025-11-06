@@ -221,24 +221,10 @@ router.get('/', async (req, res) => {
         viewedUserId: dbUser?.viewedUserId,
       })
       
-      // If found by email, update it with Clerk ID
+      // NOTE: We CANNOT update OTHER users' clerk_id because it would violate unique constraint
+      // (SELF users already use the same clerk_id). OTHER users must keep clerk_id as NULL.
       if (dbUser && !dbUser.clerkId) {
-        console.log('[User GET] Updating OTHER user with Clerk ID:', req.user.clerkId)
-        dbUser = await prisma.user.update({
-          where: { id: dbUser.id },
-          data: {
-            clerkId: req.user.clerkId,
-          },
-          include: {
-            settings: true,
-            viewedUser: {
-              include: {
-                settings: true,
-              },
-            },
-          },
-        })
-        console.log('[User GET] Updated OTHER user:', dbUser.id)
+        console.log('[User GET] Found OTHER user with NULL clerk_id (cannot update due to unique constraint):', dbUser.id)
       }
     }
 
@@ -335,8 +321,11 @@ router.get('/', async (req, res) => {
           settings: true,
         },
       })
-    } else if (!dbUser.clerkId) {
-      // Update existing user with Clerk ID if missing
+    } else if (!dbUser.clerkId && dbUser.userType !== 'OTHER') {
+      // Update existing SELF user with Clerk ID if missing
+      // NOTE: We CANNOT update OTHER users' clerk_id because it would violate unique constraint
+      // (SELF users already use the same clerk_id)
+      console.log('[User GET] Updating SELF user with Clerk ID:', req.user.clerkId)
       dbUser = await prisma.user.update({
         where: { id: dbUser.id },
         data: {
@@ -347,6 +336,9 @@ router.get('/', async (req, res) => {
           settings: true,
         },
       })
+    } else if (!dbUser.clerkId && dbUser.userType === 'OTHER') {
+      // OTHER users must keep clerk_id as NULL to avoid unique constraint violation
+      console.log('[User GET] Skipping clerk_id update for OTHER user (unique constraint):', dbUser.id)
     }
 
     // If this is an OTHER user, we need to return the viewed user's data
