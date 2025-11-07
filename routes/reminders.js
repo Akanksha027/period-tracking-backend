@@ -6,6 +6,21 @@ import jwt from 'jsonwebtoken'
 
 const router = express.Router()
 
+const MS_PER_DAY = 1000 * 60 * 60 * 24
+
+function toUTCDate(input) {
+  if (!input) return null
+  const date = input instanceof Date ? input : new Date(input)
+  if (Number.isNaN(date.getTime())) return null
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()))
+}
+
+function addDaysUTC(date, days) {
+  const result = new Date(date.getTime())
+  result.setUTCDate(result.getUTCDate() + days)
+  return result
+}
+
 /**
  * Middleware to verify Clerk JWT token (reused from user.js)
  */
@@ -132,52 +147,53 @@ function getGeminiClient() {
 /**
  * Calculate current cycle day and phase
  */
-function calculateCycleInfo(periods, settings, today) {
+function calculateCycleInfo(periods, settings, todayInput) {
   if (!periods || periods.length === 0) {
+    return null
+  }
+
+  const today = toUTCDate(todayInput || new Date())
+  if (!today) {
     return null
   }
 
   const userPeriodLength = settings?.periodDuration || settings?.averagePeriodLength || 5
   const avgCycleLength = settings?.averageCycleLength || 28
 
-  // Get last period
-  const lastPeriod = periods[0]
-  const lastPeriodStart = new Date(lastPeriod.startDate)
-  lastPeriodStart.setHours(0, 0, 0, 0)
+  const sortedPeriods = [...periods].sort(
+    (a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime()
+  )
 
-  let lastPeriodEnd = new Date(lastPeriodStart)
-  if (lastPeriod.endDate) {
-    lastPeriodEnd = new Date(lastPeriod.endDate)
-  } else {
-    lastPeriodEnd.setDate(lastPeriodEnd.getDate() + userPeriodLength - 1)
+  const lastPeriod = sortedPeriods[0]
+  const lastPeriodStart = toUTCDate(lastPeriod?.startDate)
+  if (!lastPeriodStart) {
+    return null
   }
-  lastPeriodEnd.setHours(0, 0, 0, 0)
 
-  // Check if currently on period
-  const activePeriod = periods.find(period => {
-    const start = new Date(period.startDate)
-    const startLocal = new Date(start.getFullYear(), start.getMonth(), start.getDate())
-    startLocal.setHours(0, 0, 0, 0)
+  let lastPeriodEnd = null
+  if (lastPeriod?.endDate) {
+    lastPeriodEnd = toUTCDate(lastPeriod.endDate)
+  } else {
+    lastPeriodEnd = addDaysUTC(lastPeriodStart, userPeriodLength - 1)
+  }
+  if (!lastPeriodEnd) {
+    return null
+  }
 
-    let endLocal = null
-    if (period.endDate) {
-      const end = new Date(period.endDate)
-      endLocal = new Date(end.getFullYear(), end.getMonth(), end.getDate())
-      endLocal.setHours(0, 0, 0, 0)
-    } else {
-      endLocal = new Date(startLocal)
-      endLocal.setDate(endLocal.getDate() + userPeriodLength - 1)
-    }
-
-    return startLocal <= today && endLocal >= today
+  const activePeriod = sortedPeriods.find(period => {
+    const startUTC = toUTCDate(period.startDate)
+    if (!startUTC) return false
+    const endUTC = period.endDate
+      ? toUTCDate(period.endDate)
+      : addDaysUTC(startUTC, userPeriodLength - 1)
+    if (!endUTC) return false
+    return startUTC.getTime() <= today.getTime() && endUTC.getTime() >= today.getTime()
   })
 
   if (activePeriod) {
-    const periodStart = new Date(activePeriod.startDate)
-    const periodStartLocal = new Date(periodStart.getFullYear(), periodStart.getMonth(), periodStart.getDate())
-    periodStartLocal.setHours(0, 0, 0, 0)
-
-    const diff = Math.floor((today.getTime() - periodStartLocal.getTime()) / (1000 * 60 * 60 * 24))
+    const periodStartUTC = toUTCDate(activePeriod.startDate)
+    if (!periodStartUTC) return null
+    const diff = Math.floor((today.getTime() - periodStartUTC.getTime()) / MS_PER_DAY)
     const daysInPeriod = diff + 1
 
     return {
@@ -188,13 +204,11 @@ function calculateCycleInfo(periods, settings, today) {
     }
   }
 
-  // Calculate days since last period ended
-  const daysSinceLastPeriodEnd = Math.floor((today.getTime() - lastPeriodEnd.getTime()) / (1000 * 60 * 60 * 24))
+  const daysSinceLastPeriodEnd = Math.floor((today.getTime() - lastPeriodEnd.getTime()) / MS_PER_DAY)
 
   if (daysSinceLastPeriodEnd >= 0) {
     const currentCycleDay = daysSinceLastPeriodEnd + 1 + userPeriodLength
 
-    // Determine phase
     const ovulationDay = Math.round(avgCycleLength / 2)
     const fertileStart = ovulationDay - 5
     const fertileEnd = ovulationDay
@@ -283,9 +297,8 @@ router.post('/generate', verifyClerkAuth, async (req, res) => {
     }
 
     // Calculate cycle info
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    const cycleInfo = calculateCycleInfo(dbUserWithData.periods, dbUserWithData.settings, today)
+    const todayUTC = toUTCDate(new Date())
+    const cycleInfo = calculateCycleInfo(dbUserWithData.periods, dbUserWithData.settings, todayUTC)
 
     if (!cycleInfo) {
       return res.json({ 
