@@ -171,37 +171,20 @@ router.get('/', async (req, res) => {
       email: req.user.email,
     })
 
+    const viewModeHeader = req.headers['x-view-mode']
+    const forcedMode = typeof viewModeHeader === 'string' ? viewModeHeader.toUpperCase() : null
+    const forceSelf = forcedMode === 'SELF'
+    const forceOther = forcedMode === 'OTHER'
+
     // IMPORTANT: Check for OTHER users first (viewers take precedence)
     // If a user has logged in "for someone else", they should see that data, not their own
-    let dbUser = await prisma.user.findFirst({
-      where: {
-        clerkId: req.user.clerkId,
-        userType: 'OTHER', // Check for OTHER users first by Clerk ID
-      },
-      include: {
-        settings: true,
-        viewedUser: {
-          include: {
-            settings: true,
-          },
-        },
-      },
-    })
+    let dbUser = null
 
-    console.log('[User GET] Found OTHER user by clerkId:', {
-      found: !!dbUser,
-      id: dbUser?.id,
-      email: dbUser?.email,
-      viewedUserId: dbUser?.viewedUserId,
-    })
-
-    // If no OTHER user found by Clerk ID, check by email (for cases where clerkId wasn't set)
-    if (!dbUser) {
-      console.log('[User GET] No OTHER user found by clerkId, checking by email:', req.user.email)
+    if (!forceSelf) {
       dbUser = await prisma.user.findFirst({
         where: {
-          email: req.user.email,
-          userType: 'OTHER',
+          clerkId: req.user.clerkId,
+          userType: 'OTHER', // Check for OTHER users first by Clerk ID
         },
         include: {
           settings: true,
@@ -212,70 +195,93 @@ router.get('/', async (req, res) => {
           },
         },
       })
-      
-      console.log('[User GET] Found OTHER user by email:', {
+
+      console.log('[User GET] Found OTHER user by clerkId:', {
         found: !!dbUser,
         id: dbUser?.id,
         email: dbUser?.email,
-        clerkId: dbUser?.clerkId,
         viewedUserId: dbUser?.viewedUserId,
       })
-      
-      // NOTE: We CANNOT update OTHER users' clerk_id because it would violate unique constraint
-      // (SELF users already use the same clerk_id). OTHER users must keep clerk_id as NULL.
-      if (dbUser && !dbUser.clerkId) {
-        console.log('[User GET] Found OTHER user with NULL clerk_id (cannot update due to unique constraint):', dbUser.id)
+
+      // If no OTHER user found by Clerk ID, check by email (for cases where clerkId wasn't set)
+      if (!dbUser && !forceSelf) {
+        console.log('[User GET] No OTHER user found by clerkId, checking by email:', req.user.email)
+        dbUser = await prisma.user.findFirst({
+          where: {
+            email: req.user.email,
+            userType: 'OTHER',
+          },
+          include: {
+            settings: true,
+            viewedUser: {
+              include: {
+                settings: true,
+              },
+            },
+          },
+        })
+        
+        console.log('[User GET] Found OTHER user by email:', {
+          found: !!dbUser,
+          id: dbUser?.id,
+          email: dbUser?.email,
+          clerkId: dbUser?.clerkId,
+          viewedUserId: dbUser?.viewedUserId,
+        })
+        
+        if (dbUser && !dbUser.clerkId) {
+          console.log('[User GET] Found OTHER user with NULL clerk_id (cannot update due to unique constraint):', dbUser.id)
+        }
+      }
+
+      // Additional fallback: If still no OTHER user found, check for OTHER users with NULL clerk_id
+      if (!dbUser && !forceSelf) {
+        console.log('[User GET] No OTHER user found by email, checking for OTHER users with email pattern matching')
+
+        const otherUsersWithNullClerkId = await prisma.user.findMany({
+          where: {
+            userType: 'OTHER',
+            clerkId: null,
+            email: {
+              contains: '.viewer.',
+            },
+          },
+          include: {
+            settings: true,
+            viewedUser: {
+              include: {
+                settings: true,
+              },
+            },
+          },
+          orderBy: {
+            createdAt: 'desc', // Get the most recent one
+          },
+        })
+
+        console.log('[User GET] Found OTHER users with NULL clerk_id and .viewer. pattern:', otherUsersWithNullClerkId.length)
+
+        if (otherUsersWithNullClerkId.length > 0) {
+          dbUser = otherUsersWithNullClerkId[0]
+          console.log('[User GET] Using OTHER user (cannot set clerk_id due to unique constraint):', {
+            otherUserId: dbUser.id,
+            otherUserEmail: dbUser.email,
+            currentUserClerkId: req.user.clerkId,
+            currentUserEmail: req.user.email,
+            viewedUserId: dbUser.viewedUserId,
+            viewedUserEmail: dbUser.viewedUser?.email,
+          })
+        }
       }
     }
 
-    // Additional fallback: If still no OTHER user found, check for OTHER users with NULL clerk_id
-    // NOTE: We CANNOT set clerk_id on OTHER users because it violates the unique constraint
-    // (SELF users already use the same clerk_id). Instead, we'll query by email pattern matching.
-    // OTHER user emails follow pattern: "{viewedEmail}.viewer.{identifier}"
-    if (!dbUser) {
-      console.log('[User GET] No OTHER user found by email, checking for OTHER users with email pattern matching')
-      
-      // Find OTHER users where the email contains ".viewer." (pattern for viewer accounts)
-      // and check if any match the current user's context
-      // We'll also check for OTHER users with NULL clerk_id as a fallback
-      const otherUsersWithNullClerkId = await prisma.user.findMany({
-        where: {
-          userType: 'OTHER',
-          clerkId: null,
-          email: {
-            contains: '.viewer.',
-          },
-        },
-        include: {
-          settings: true,
-          viewedUser: {
-            include: {
-              settings: true,
-            },
-          },
-        },
-        orderBy: {
-          createdAt: 'desc', // Get the most recent one
-        },
-      })
-
-      console.log('[User GET] Found OTHER users with NULL clerk_id and .viewer. pattern:', otherUsersWithNullClerkId.length)
-
-      // Since we can't set clerk_id (unique constraint), we'll use the most recent one
-      // that matches the context. In a production system, you'd want better matching logic.
-      if (otherUsersWithNullClerkId.length > 0) {
-        dbUser = otherUsersWithNullClerkId[0]
-        console.log('[User GET] Using OTHER user (cannot set clerk_id due to unique constraint):', {
-          otherUserId: dbUser.id,
-          otherUserEmail: dbUser.email,
-          currentUserClerkId: req.user.clerkId,
-          currentUserEmail: req.user.email,
-          viewedUserId: dbUser.viewedUserId,
-          viewedUserEmail: dbUser.viewedUser?.email,
-        })
-        // NOTE: We're NOT updating clerk_id here because it would violate the unique constraint
-        // The OTHER user will remain with clerk_id = NULL, but we can still use it for lookup
-      }
+    // If no OTHER user found and mode is explicitly OTHER, return 404
+    if (!dbUser && forceOther) {
+      console.log('[User GET] Forced OTHER mode but no viewer record found');
+      return res.status(404).json({
+        error: 'VIEWER_NOT_FOUND',
+        message: 'Viewer access no longer exists.',
+      });
     }
 
     // If no OTHER user found, check for SELF user
@@ -370,6 +376,14 @@ router.get('/', async (req, res) => {
           settings: dbUser.viewedUser.settings, // Return viewed user's settings
         },
       })
+    }
+
+    if (forceOther) {
+      console.log('[User GET] Forced OTHER mode but viewer record missing viewedUser data');
+      return res.status(404).json({
+        error: 'VIEWER_NOT_FOUND',
+        message: 'Viewer access no longer exists.',
+      });
     }
 
     console.log('[User GET] Returning SELF user data:', {
@@ -507,21 +521,42 @@ router.get('/settings', async (req, res) => {
         },
       })
       
-      // If found by email, update it with Clerk ID
+      // NOTE: We CANNOT update OTHER users' clerk_id because it would violate unique constraint
       if (dbUser && !dbUser.clerkId) {
-        dbUser = await prisma.user.update({
-          where: { id: dbUser.id },
-          data: {
-            clerkId: req.user.clerkId,
+        console.log('[User Settings] Found OTHER user with NULL clerk_id (cannot update):', dbUser.id)
+      }
+    }
+
+    // Additional fallback: Check for OTHER users with NULL clerk_id
+    if (!dbUser) {
+      console.log('[User Settings] Checking for OTHER users with NULL clerk_id')
+      const otherUsersWithNullClerkId = await prisma.user.findMany({
+        where: {
+          userType: 'OTHER',
+          clerkId: null,
+          email: {
+            contains: '.viewer.',
           },
-          include: {
-            settings: true,
-            viewedUser: {
-              include: {
-                settings: true,
-              },
+        },
+        include: {
+          settings: true,
+          viewedUser: {
+            include: {
+              settings: true,
             },
           },
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+        take: 1,
+      })
+
+      if (otherUsersWithNullClerkId.length > 0) {
+        dbUser = otherUsersWithNullClerkId[0]
+        console.log('[User Settings] Found OTHER user with NULL clerk_id:', {
+          otherUserId: dbUser.id,
+          viewedUserId: dbUser.viewedUserId,
         })
       }
     }
