@@ -176,11 +176,76 @@ router.get('/', async (req, res) => {
     const forceSelf = forcedMode === 'SELF'
     const forceOther = forcedMode === 'OTHER'
 
-    // IMPORTANT: Check for OTHER users first (viewers take precedence)
-    // If a user has logged in "for someone else", they should see that data, not their own
     let dbUser = null
 
-    if (!forceSelf) {
+    // STEP 1: If the client explicitly asked for SELF, or no mode was provided, fetch SELF first
+    if (!forceOther) {
+      console.log('[User GET] Looking for SELF user first')
+      dbUser = await prisma.user.findFirst({
+        where: {
+          OR: [
+            { clerkId: req.user.clerkId },
+            { email: req.user.email },
+          ],
+        },
+        include: {
+          settings: true,
+        },
+      })
+
+      if (dbUser) {
+        console.log('[User GET] Found SELF user:', {
+          id: dbUser.id,
+          email: dbUser.email,
+          userType: dbUser.userType,
+        })
+
+        if (!dbUser.clerkId) {
+          console.log('[User GET] Updating SELF user with Clerk ID:', req.user.clerkId)
+          dbUser = await prisma.user.update({
+            where: { id: dbUser.id },
+            data: {
+              clerkId: req.user.clerkId,
+              userType: dbUser.userType || 'SELF',
+            },
+            include: {
+              settings: true,
+            },
+          })
+        } else if (!dbUser.userType || dbUser.userType !== 'SELF') {
+          dbUser = await prisma.user.update({
+            where: { id: dbUser.id },
+            data: {
+              userType: 'SELF',
+            },
+            include: {
+              settings: true,
+            },
+          })
+        }
+
+        // Return immediately if we were forced SELF or if no explicit OTHER was requested
+        if (forceSelf || !forceOther) {
+          return res.json({
+            message: 'User profile retrieved',
+            user: {
+              id: dbUser.id,
+              email: dbUser.email,
+              name: dbUser.name,
+              clerkId: dbUser.clerkId,
+              userType: 'SELF',
+              viewedUserId: dbUser.viewedUserId,
+              createdAt: dbUser.createdAt,
+              updatedAt: dbUser.updatedAt,
+              settings: dbUser.settings,
+            },
+          })
+        }
+      }
+    }
+
+    // STEP 2: If client asked for OTHER (or SELF not found and no explicit SELF), search viewer records
+    if (!dbUser && !forceSelf) {
       dbUser = await prisma.user.findFirst({
         where: {
           clerkId: req.user.clerkId,
@@ -245,6 +310,9 @@ router.get('/', async (req, res) => {
             email: {
               contains: '.viewer.',
             },
+            viewedUser: {
+              email: req.user.email,
+            },
           },
           include: {
             settings: true,
@@ -275,39 +343,8 @@ router.get('/', async (req, res) => {
       }
     }
 
-    // If no OTHER user found and mode is explicitly OTHER, return 404
-    if (!dbUser && forceOther) {
-      console.log('[User GET] Forced OTHER mode but no viewer record found');
-      return res.status(404).json({
-        error: 'VIEWER_NOT_FOUND',
-        message: 'Viewer access no longer exists.',
-      });
-    }
-
-    // If no OTHER user found, check for SELF user
-    if (!dbUser) {
-      console.log('[User GET] No OTHER user found, checking for SELF user')
-      dbUser = await prisma.user.findFirst({
-        where: {
-          OR: [
-            { clerkId: req.user.clerkId },
-            { email: req.user.email },
-          ],
-        },
-        include: {
-          settings: true,
-        },
-      })
-      console.log('[User GET] Found SELF user:', {
-        found: !!dbUser,
-        id: dbUser?.id,
-        email: dbUser?.email,
-        userType: dbUser?.userType,
-      })
-    }
-
-    // If user doesn't exist, create a new SELF user (default behavior)
-    if (!dbUser) {
+    // If no user found at all, create SELF entry if not forcing OTHER
+    if (!dbUser && !forceOther) {
       console.log('[User GET] No user found, creating new SELF user')
       const userName = req.user.firstName || req.user.lastName
         ? `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim()
@@ -327,29 +364,16 @@ router.get('/', async (req, res) => {
           settings: true,
         },
       })
-    } else if (!dbUser.clerkId && dbUser.userType !== 'OTHER') {
-      // Update existing SELF user with Clerk ID if missing
-      // NOTE: We CANNOT update OTHER users' clerk_id because it would violate unique constraint
-      // (SELF users already use the same clerk_id)
-      console.log('[User GET] Updating SELF user with Clerk ID:', req.user.clerkId)
-      dbUser = await prisma.user.update({
-        where: { id: dbUser.id },
-        data: {
-          clerkId: req.user.clerkId,
-          userType: dbUser.userType || 'SELF',
-        },
-        include: {
-          settings: true,
-        },
-      })
-    } else if (!dbUser.clerkId && dbUser.userType === 'OTHER') {
-      // OTHER users must keep clerk_id as NULL to avoid unique constraint violation
-      console.log('[User GET] Skipping clerk_id update for OTHER user (unique constraint):', dbUser.id)
+    } else if (!dbUser && forceOther) {
+      console.log('[User GET] Forced OTHER mode but no viewer record found');
+      return res.status(404).json({
+        error: 'VIEWER_NOT_FOUND',
+        message: 'Viewer access no longer exists.',
+      });
     }
 
     // If this is an OTHER user, we need to return the viewed user's data
-    // but keep the OTHER user's ID and userType for context
-    if (dbUser.userType === 'OTHER' && dbUser.viewedUser) {
+    if (dbUser && dbUser.userType === 'OTHER' && dbUser.viewedUser) {
       console.log('[User GET] Returning OTHER user data for viewed user:', {
         otherUserId: dbUser.id,
         viewedUserId: dbUser.viewedUser.id,
