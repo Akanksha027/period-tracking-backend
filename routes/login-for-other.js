@@ -1338,97 +1338,73 @@ router.post('/complete-login', async (req, res) => {
       console.error('[Login For Other] Error details:', error.message, error.stack)
     }
 
-    // Try to find existing OTHER user for this viewer (by clerkId if available, or by viewedUserId)
+    // Find or create the viewer (OTHER) user without violating clerk_id uniqueness
     let otherUser = null
-    console.log('[Login For Other] Searching for existing OTHER user:', {
+    console.log('[Login For Other] Resolving viewer account:', {
       viewerClerkId,
       viewedUserId: selfUser.id,
     })
-    
+
     if (viewerClerkId) {
-      // First, try to find by clerkId (this is the primary lookup - viewer's Clerk ID)
-      otherUser = await prisma.user.findFirst({
-        where: {
-          clerkId: viewerClerkId,
-          userType: 'OTHER',
-        },
+      const existingByClerk = await prisma.user.findUnique({
+        where: { clerkId: viewerClerkId },
       })
-      console.log('[Login For Other] Found OTHER user by clerkId:', !!otherUser, otherUser?.id)
-      
-      // If found, check if it's viewing the same SELF user, or update it
-      if (otherUser) {
-        if (otherUser.viewedUserId !== selfUser.id) {
-          // Update existing OTHER user to view this SELF user instead
-          console.log('[Login For Other] Updating existing OTHER user to view different SELF user')
+
+      if (existingByClerk) {
+        // Convert existing record (SELF or OTHER) into an OTHER viewer for this selfUser
+        if (existingByClerk.userType !== 'OTHER' || existingByClerk.viewedUserId !== selfUser.id) {
+          console.log('[Login For Other] Updating existing user with same Clerk ID to OTHER viewer')
           otherUser = await prisma.user.update({
-            where: { id: otherUser.id },
+            where: { id: existingByClerk.id },
             data: {
+              userType: 'OTHER',
               viewedUserId: selfUser.id,
+              name: existingByClerk.name || `Viewer for ${selfUser.email}`,
             },
           })
+        } else {
+          otherUser = existingByClerk
         }
       }
     }
 
-    // If not found and we have viewerClerkId, try to find any OTHER user viewing this SELF user (but prefer updating to use viewerClerkId)
     if (!otherUser) {
-      otherUser = await prisma.user.findFirst({
-        where: {
-          viewedUserId: selfUser.id,
-          userType: 'OTHER',
-        },
-        orderBy: {
-          createdAt: 'desc', // Get the most recent one
-        },
-      })
-      console.log('[Login For Other] Found OTHER user by viewedUserId:', !!otherUser, otherUser?.id)
-      
-      // If found but doesn't have clerkId, update it
-      if (otherUser && viewerClerkId && !otherUser.clerkId) {
-        console.log('[Login For Other] Updating existing OTHER user with Clerk ID')
-        otherUser = await prisma.user.update({
-          where: { id: otherUser.id },
-          data: {
-            clerkId: viewerClerkId,
-          },
-        })
-      }
-    }
-
-    // If still not found, create a new OTHER user
-    if (!otherUser) {
-      const viewerEmail = viewerClerkId 
-        ? `${normalizedEmail}.viewer.${viewerClerkId}`.toLowerCase()
-        : viewerIdentifier 
+      // No record with matching clerkId exists. Create a dedicated OTHER record.
+      let viewerEmail = viewerIdentifier
         ? `${normalizedEmail}.viewer.${viewerIdentifier}`.toLowerCase()
         : `${normalizedEmail}.viewer.${Date.now()}`.toLowerCase()
+      let viewerName = `Viewer for ${selfUser.email}`
 
-      console.log('[Login For Other] Creating new OTHER user:', {
+      if (viewerClerkId) {
+        try {
+          const viewerClerkUser = await clerk.users.getUser(viewerClerkId)
+          const clerkPrimaryEmail = viewerClerkUser?.emailAddresses?.[0]?.emailAddress?.toLowerCase()
+          if (clerkPrimaryEmail) {
+            viewerEmail = clerkPrimaryEmail
+          }
+          if (viewerClerkUser?.firstName || viewerClerkUser?.lastName) {
+            viewerName = `${viewerClerkUser.firstName || ''} ${viewerClerkUser.lastName || ''}`.trim() || viewerName
+          }
+        } catch (viewerFetchError) {
+          console.warn('[Login For Other] Unable to fetch viewer details from Clerk:', viewerFetchError?.message)
+        }
+      }
+
+      console.log('[Login For Other] Creating viewer account', {
         email: viewerEmail,
-        clerkId: viewerClerkId,
+        clerkId: viewerClerkId || null,
         viewedUserId: selfUser.id,
       })
 
       otherUser = await prisma.user.create({
         data: {
           email: viewerEmail,
-          clerkId: viewerClerkId, // Link to viewer's Clerk ID if available
+          clerkId: viewerClerkId || null,
           userType: 'OTHER',
-          viewedUserId: selfUser.id, // Link to the SELF user they're viewing
-          name: `Viewer for ${selfUser.email}`,
+          viewedUserId: selfUser.id,
+          name: viewerName,
         },
       })
-      console.log('[Login For Other] Created OTHER user:', otherUser.id)
-    } else if (viewerClerkId && !otherUser.clerkId) {
-      // Update existing OTHER user with Clerk ID if we have it
-      console.log('[Login For Other] Updating existing OTHER user with Clerk ID:', viewerClerkId)
-      otherUser = await prisma.user.update({
-        where: { id: otherUser.id },
-        data: {
-          clerkId: viewerClerkId,
-        },
-      })
-      console.log('[Login For Other] Updated OTHER user:', otherUser.id)
     }
     
     console.log('[Login For Other] Final OTHER user:', {
