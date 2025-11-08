@@ -361,7 +361,10 @@ CRITICAL RULES:
       const hasMoodData = dbUserWithData.moods && dbUserWithData.moods.length > 0
       const hasNoteData = dbUserWithData.notes && dbUserWithData.notes.length > 0
       const hasSettings = dbUserWithData.settings !== null
-      
+
+      const inferredOffsetRaw = resolveTimezoneOffset(req, dbUserWithData.periods)
+      const inferredOffset = Number.isFinite(inferredOffsetRaw) ? inferredOffsetRaw : 0
+
       if (hasPeriodData || hasSymptomData || hasMoodData || hasNoteData || hasSettings) {
         userCycleContext += `\n\nCOMPLETE USER PROFILE INFORMATION - Use ALL of this data to provide personalized, comprehensive advice:\n\n`
         
@@ -444,7 +447,6 @@ CRITICAL RULES:
             }
           }
           
-          const inferredOffset = resolveTimezoneOffset(req, dbUserWithData.periods)
           const cycleInfo = calculateCycleInfo(dbUserWithData.periods, dbUserWithData.settings, {
             today: new Date(),
             timezoneOffsetMinutes: inferredOffset,
@@ -525,11 +527,10 @@ CRITICAL RULES:
         
         if (hasSymptomData && dbUserWithData.symptoms) {
           userCycleContext += `\nSYMPTOM TRACKING (${dbUserWithData.symptoms.length} entries - COMPLETE HISTORY):\n`
-          const timezoneOffset = inferredOffset
           const symptomsWithLocalDate = dbUserWithData.symptoms
             .map((s) => {
-              const initialDay = getLocalDayNumber(s.date, timezoneOffset)
-              const initialLocalDate = fromLocalDayNumber(initialDay, timezoneOffset)
+              const initialDay = getLocalDayNumber(s.date, inferredOffset)
+              const initialLocalDate = fromLocalDayNumber(initialDay, inferredOffset)
               const effectiveDateCandidate = initialLocalDate instanceof Date && !Number.isNaN(initialLocalDate.getTime())
                 ? initialLocalDate
                 : new Date(s.date)
@@ -538,7 +539,7 @@ CRITICAL RULES:
                 return null
               }
 
-              const effectiveDayNumber = initialDay ?? getLocalDayNumber(effectiveDateCandidate, timezoneOffset)
+              const effectiveDayNumber = initialDay ?? getLocalDayNumber(effectiveDateCandidate, inferredOffset)
 
               if (effectiveDayNumber === null) {
                 return null
@@ -572,10 +573,10 @@ CRITICAL RULES:
               
               // Find which period this symptom is closest to
               for (const period of sortedPeriods) {
-                const periodStartDay = getLocalDayNumber(period.startDate, timezoneOffset)
+                const periodStartDay = getLocalDayNumber(period.startDate, inferredOffset)
                 if (periodStartDay == null) continue
                 const periodEndDay =
-                  getLocalDayNumber(period.endDate, timezoneOffset) ??
+                  getLocalDayNumber(period.endDate, inferredOffset) ??
                   periodStartDay + userPeriodLength - 1
                 
                 const daysSincePeriodStart = symptomDay - periodStartDay
