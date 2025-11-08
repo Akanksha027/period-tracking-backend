@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken'
 import {
   calculateCycleInfo,
   fromLocalDayNumber,
+  getLocalDayNumber,
   inferTimezoneOffsetFromPeriods,
 } from '../utils/cycleInfo.js'
 
@@ -522,39 +523,45 @@ CRITICAL RULES:
           userCycleContext += `- Still answer their other questions about symptoms, health, etc., but be clear about cycle information limitations\n`
         }
         
-        // Symptom Data - Enhanced with cycle correlation
         if (hasSymptomData && dbUserWithData.symptoms) {
           userCycleContext += `\nSYMPTOM TRACKING (${dbUserWithData.symptoms.length} entries - COMPLETE HISTORY):\n`
           
-          // Symptom frequency and severity analysis
-          const symptomCounts = {}
-          const symptomCycleCorrelation = {} // Track symptoms by cycle phase
+          const timezoneOffset = inferredOffset
+          const symptomsWithLocalDate = dbUserWithData.symptoms
+            .map((s) => {
+              const localDay = getLocalDayNumber(s.date, timezoneOffset)
+              const localDate = fromLocalDayNumber(localDay, timezoneOffset)
+              return { raw: s, localDay, localDate }
+            })
+            .filter((entry) => entry.localDay !== null && entry.localDate instanceof Date && !Number.isNaN(entry.localDate.getTime()))
           
-          dbUserWithData.symptoms.forEach(s => {
+          const symptomCounts = {}
+          const symptomCycleCorrelation = {}
+          
+          symptomsWithLocalDate.forEach(({ raw: s, localDay, localDate }) => {
             if (!symptomCounts[s.type]) {
               symptomCounts[s.type] = { count: 0, avgSeverity: 0, recent: [], dates: [], severities: [] }
             }
             symptomCounts[s.type].count++
             symptomCounts[s.type].avgSeverity += s.severity
-            symptomCounts[s.type].recent.push(new Date(s.date))
-            symptomCounts[s.type].dates.push(new Date(s.date))
+            symptomCounts[s.type].recent.push(localDate)
+            symptomCounts[s.type].dates.push(localDate)
             symptomCounts[s.type].severities.push(s.severity)
             
             // Correlate symptom with cycle phase
             if (dbUserWithData.periods.length > 0) {
-              const symptomDate = new Date(s.date)
+              const symptomDay = localDay
               const sortedPeriods = [...dbUserWithData.periods].sort((a, b) => new Date(b.startDate) - new Date(a.startDate))
               
               // Find which period this symptom is closest to
               for (const period of sortedPeriods) {
-                const periodStart = new Date(period.startDate)
-                const periodEnd = period.endDate ? new Date(period.endDate) : (() => {
-                  const end = new Date(periodStart)
-                  end.setDate(end.getDate() + userPeriodLength - 1)
-                  return end
-                })()
+                const periodStartDay = getLocalDayNumber(period.startDate, timezoneOffset)
+                if (periodStartDay == null) continue
+                const periodEndDay =
+                  getLocalDayNumber(period.endDate, timezoneOffset) ??
+                  periodStartDay + userPeriodLength - 1
                 
-                const daysSincePeriodStart = Math.floor((symptomDate - periodStart) / (1000 * 60 * 60 * 24))
+                const daysSincePeriodStart = symptomDay - periodStartDay
                 
                 if (daysSincePeriodStart >= -7 && daysSincePeriodStart <= userPeriodLength + 14) {
                   let phase = 'unknown'
@@ -611,14 +618,14 @@ CRITICAL RULES:
           // Recent symptoms (last 7 days)
           const sevenDaysAgo = new Date()
           sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
-          const recentSymptoms = dbUserWithData.symptoms
-            .filter(s => new Date(s.date) >= sevenDaysAgo)
-            .sort((a, b) => new Date(b.date) - new Date(a.date))
+          const recentSymptoms = symptomsWithLocalDate
+            .filter((s) => s.localDate >= sevenDaysAgo)
+            .sort((a, b) => b.localDate.getTime() - a.localDate.getTime())
           
           if (recentSymptoms.length > 0) {
             userCycleContext += `\n- Recent Symptoms (Last 7 Days):\n`
-            recentSymptoms.forEach(s => {
-              userCycleContext += `  • ${new Date(s.date).toLocaleDateString()}: ${s.type} (severity: ${s.severity}/5)\n`
+            recentSymptoms.forEach(({ raw: s, localDate }) => {
+              userCycleContext += `  • ${localDate.toLocaleDateString()}: ${s.type} (severity: ${s.severity}/5)\n`
             })
           }
         }
@@ -629,33 +636,35 @@ CRITICAL RULES:
           
           const moodCounts = {}
           const moodCycleCorrelation = {}
-          const moodDates = []
+          const moodWithLocalDate = dbUserWithData.moods
+            .map((m) => {
+              const localDay = getLocalDayNumber(m.date, inferredOffset)
+              const localDate = fromLocalDayNumber(localDay, inferredOffset)
+              return { raw: m, localDay, localDate }
+            })
+            .filter((entry) => entry.localDay !== null && entry.localDate instanceof Date && !Number.isNaN(entry.localDate.getTime()))
           
-          dbUserWithData.moods.forEach(m => {
+          moodWithLocalDate.forEach(({ raw: m, localDay, localDate }) => {
             moodCounts[m.type] = (moodCounts[m.type] || 0) + 1
-            moodDates.push({ type: m.type, date: new Date(m.date) })
             
-            // Correlate mood with cycle phase
             if (dbUserWithData.periods.length > 0) {
-              const moodDate = new Date(m.date)
               const sortedPeriods = [...dbUserWithData.periods].sort((a, b) => new Date(b.startDate) - new Date(a.startDate))
               
               for (const period of sortedPeriods) {
-                const periodStart = new Date(period.startDate)
-                const periodEnd = period.endDate ? new Date(period.endDate) : (() => {
-                  const end = new Date(periodStart)
-                  end.setDate(end.getDate() + userPeriodLength - 1)
-                  return end
-                })()
+                const periodStartDay = getLocalDayNumber(period.startDate, inferredOffset)
+                if (periodStartDay == null) continue
+                const periodEndDay =
+                  getLocalDayNumber(period.endDate, inferredOffset) ??
+                  periodStartDay + userPeriodLength - 1
                 
-                const daysSincePeriodStart = Math.floor((moodDate - periodStart) / (1000 * 60 * 60 * 24))
+                const daysSincePeriodStart = localDay - periodStartDay
                 
                 if (daysSincePeriodStart >= -7 && daysSincePeriodStart <= userPeriodLength + 14) {
                   let phase = 'unknown'
                   if (daysSincePeriodStart < 0) phase = 'PMS/Pre-period'
-                  else if (daysSincePeriodStart >= 0 && daysSincePeriodStart < userPeriodLength) phase = 'Period'
-                  else if (daysSincePeriodStart >= userPeriodLength && daysSincePeriodStart < userPeriodLength + 7) phase = 'Post-period'
-                  else if (daysSincePeriodStart >= userPeriodLength + 7 && daysSincePeriodStart < userPeriodLength + 14) phase = 'Fertile/Ovulation'
+                  else if (daysSincePeriodStart < userPeriodLength) phase = 'Period'
+                  else if (daysSincePeriodStart < userPeriodLength + 7) phase = 'Post-period'
+                  else if (daysSincePeriodStart < userPeriodLength + 14) phase = 'Fertile/Ovulation'
                   else phase = 'Luteal'
                   
                   if (!moodCycleCorrelation[m.type]) {
@@ -671,7 +680,6 @@ CRITICAL RULES:
             }
           })
           
-          // Most common moods
           const mostCommonMoods = Object.entries(moodCounts)
             .sort(([, a], [, b]) => b - a)
             .map(([mood, count]) => ({ mood, count, correlation: moodCycleCorrelation[mood] || {} }))
@@ -686,29 +694,31 @@ CRITICAL RULES:
             userCycleContext += `\n`
           })
           
-          // Recent moods (last 7 days)
-          const sevenDaysAgo = new Date()
-          sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
-          const recentMoods = moodDates
-            .filter(m => m.date >= sevenDaysAgo)
-            .sort((a, b) => b.date - a.date)
+          const moodSevenDaysAgo = new Date()
+          moodSevenDaysAgo.setDate(moodSevenDaysAgo.getDate() - 7)
+          const recentMoods = moodWithLocalDate
+            .filter((m) => m.localDate >= moodSevenDaysAgo)
+            .sort((a, b) => b.localDate.getTime() - a.localDate.getTime())
           
           if (recentMoods.length > 0) {
             userCycleContext += `\n- Recent Moods (Last 7 Days):\n`
-            recentMoods.forEach(m => {
-              userCycleContext += `  • ${m.date.toLocaleDateString()}: ${m.type}\n`
+            recentMoods.forEach(({ raw: m, localDate }) => {
+              userCycleContext += `  • ${localDate.toLocaleDateString()}: ${m.type}\n`
             })
           }
           
-          // Mood patterns
           const positiveMoods = ['happy', 'energetic', 'calm', 'excited', 'confident', 'grateful', 'peaceful']
           const negativeMoods = ['anxious', 'sad', 'irritated', 'stressed', 'tired', 'overwhelmed', 'frustrated']
           
-          const positiveCount = mostCommonMoods.filter(m => positiveMoods.includes(m.mood)).reduce((sum, m) => sum + m.count, 0)
-          const negativeCount = mostCommonMoods.filter(m => negativeMoods.includes(m.mood)).reduce((sum, m) => sum + m.count, 0)
+          const positiveCount = mostCommonMoods
+            .filter((m) => positiveMoods.includes(m.mood))
+            .reduce((sum, m) => sum + m.count, 0)
+          const negativeCount = mostCommonMoods
+            .filter((m) => negativeMoods.includes(m.mood))
+            .reduce((sum, m) => sum + m.count, 0)
           
           if (positiveCount + negativeCount > 0) {
-            const positiveRatio = (positiveCount / (positiveCount + negativeCount) * 100).toFixed(1)
+            const positiveRatio = ((positiveCount / (positiveCount + negativeCount)) * 100).toFixed(1)
             userCycleContext += `\n- Emotional Pattern: ${positiveRatio}% positive moods, ${(100 - positiveRatio).toFixed(1)}% challenging moods\n`
           }
         }
@@ -774,12 +784,21 @@ CRITICAL RULES:
         }
         
         // Symptom-Mood Correlation
+        const toLocalDateString = (dateValue) => {
+          const dayNumber = getLocalDayNumber(dateValue, inferredOffset)
+          const localDate = fromLocalDayNumber(dayNumber, inferredOffset)
+          if (localDate && !Number.isNaN(localDate.getTime())) {
+            return localDate.toDateString()
+          }
+          return new Date(dateValue).toDateString()
+        }
+
         if (hasSymptomData && hasMoodData && dbUserWithData.symptoms.length > 0 && dbUserWithData.moods.length > 0) {
           userCycleContext += `\nSYMPTOM-MOOD CORRELATION ANALYSIS:\n`
           
           // Find days where both symptoms and moods were logged
-          const symptomDates = new Set(dbUserWithData.symptoms.map(s => new Date(s.date).toDateString()))
-          const moodDates = new Set(dbUserWithData.moods.map(m => new Date(m.date).toDateString()))
+          const symptomDates = new Set(dbUserWithData.symptoms.map((s) => toLocalDateString(s.date)))
+          const moodDates = new Set(dbUserWithData.moods.map((m) => toLocalDateString(m.date)))
           const commonDates = [...symptomDates].filter(d => moodDates.has(d))
           
           if (commonDates.length > 0) {
@@ -788,8 +807,8 @@ CRITICAL RULES:
             // Analyze correlations on same days
             commonDates.slice(0, 10).forEach(dateStr => {
               const date = new Date(dateStr)
-              const daySymptoms = dbUserWithData.symptoms.filter(s => new Date(s.date).toDateString() === dateStr)
-              const dayMoods = dbUserWithData.moods.filter(m => new Date(m.date).toDateString() === dateStr)
+              const daySymptoms = dbUserWithData.symptoms.filter(s => toLocalDateString(s.date) === dateStr)
+              const dayMoods = dbUserWithData.moods.filter(m => toLocalDateString(m.date) === dateStr)
               
               if (daySymptoms.length > 0 && dayMoods.length > 0) {
                 const avgSeverity = daySymptoms.reduce((sum, s) => sum + s.severity, 0) / daySymptoms.length

@@ -16,13 +16,13 @@ export function getLocalDayNumber(dateInput, timezoneOffsetMinutes = 0) {
   const date = dateInput instanceof Date ? dateInput : new Date(dateInput);
   if (Number.isNaN(date.getTime())) return null;
   const offsetMs = timezoneOffsetMinutes * 60 * 1000;
-  return Math.floor((date.getTime() - offsetMs) / MS_PER_DAY);
+  return Math.floor((date.getTime() + offsetMs) / MS_PER_DAY);
 }
 
 export function fromLocalDayNumber(dayNumber, timezoneOffsetMinutes = 0) {
   if (!Number.isFinite(dayNumber)) return null;
   const offsetMs = timezoneOffsetMinutes * 60 * 1000;
-  const utcMs = dayNumber * MS_PER_DAY + offsetMs;
+  const utcMs = dayNumber * MS_PER_DAY - offsetMs;
   return new Date(utcMs);
 }
 
