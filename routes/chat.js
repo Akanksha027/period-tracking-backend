@@ -198,7 +198,13 @@ router.post('/', verifyClerkAuth, async (req, res) => {
       return res.status(400).json({ error: 'Messages array is required' })
     }
 
-    // Find user in database
+    // Find viewer record (could be SELF or OTHER)
+    const viewerRecord = await prisma.user.findFirst({
+      where: { clerkId: req.user.clerkId },
+      include: { viewedUser: true },
+    })
+
+    // Find user in database (SELF target when viewer)
     const dbUser = await findUserByClerkId(req.user.clerkId)
     
     if (!dbUser) {
@@ -233,7 +239,14 @@ router.post('/', verifyClerkAuth, async (req, res) => {
       return res.status(404).json({ error: 'User not found' })
     }
 
-    const userName = dbUserWithData.name || req.user.firstName || 'there'
+    const trackedUserName = dbUserWithData.name || viewerRecord?.viewedUser?.name || req.user.firstName || 'there'
+    const viewerName =
+      req.user.firstName ||
+      viewerRecord?.name ||
+      req.user.email?.split('@')[0] ||
+      'there'
+    const isViewerMode = viewerRecord?.userType === 'OTHER' && viewerRecord?.viewedUser
+    const conversationName = isViewerMode ? viewerName : trackedUserName
 
     // Check if Gemini API key is configured
     if (!process.env.GEMINI_API_KEY) {
@@ -242,6 +255,8 @@ router.post('/', verifyClerkAuth, async (req, res) => {
     }
 
     const systemPrompt = `You are Peri Peri Health Assistant, a professional and knowledgeable women's health assistant. Your role is to provide evidence-based, medically-informed guidance about menstrual health symptoms in a clear, professional, and supportive manner. Always identify yourself as "Peri Peri Health Assistant" when referring to your role.
+
+If you are speaking with a viewer (supporter) named ${viewerName} about ${trackedUserName}, you must address ${viewerName} directly, using language such as "${trackedUserName} is experiencing..." or "She might feel...". Never speak as if you are directly addressing ${trackedUserName} when the viewer is the one chatting. Focus on giving ${viewerName} supportive insights and next steps they can take for ${trackedUserName}. If data is missing, suggest how ${viewerName} can help ${trackedUserName} track observations, rather than saying data is unavailable.
 
 **YOUR CORE MISSION:**
 You have COMPLETE ACCESS to the user's period tracking data, symptom history, mood patterns, personal notes, cycle patterns, and settings. Use ALL of this data to provide HIGHLY PERSONALIZED advice that is specific to HER patterns, not generic information. Your responses should demonstrate that you know her history and can identify patterns in her cycle and symptoms.
@@ -330,7 +345,7 @@ PRODUCTS THAT MIGHT HELP (you can order these now):
 • Warm comfort foods: https://www.zomato.com/search?q=warm+soup"
 
 CRITICAL RULES:
-1. ALWAYS address the user by their name (use "${userName}" in your responses)
+1. ALWAYS address the conversational partner by their name (use "${conversationName}" in your responses). When speaking with a viewer, explicitly reference ${trackedUserName}'s experiences and offer guidance for ${conversationName} to support her.
 2. NO emojis, hearts, flowers - maintain warm but professional supportive tone
 3. START with EMOTIONAL SUPPORT - validate their feelings, let them know they're not alone
 4. FOCUS ENTIRELY on PRACTICAL TIPS and ACTIONABLE GUIDANCE - NO scientific explanations about causes, mechanisms, or medical terms
@@ -370,7 +385,7 @@ CRITICAL RULES:
         
         // User Basic Info
         userCycleContext += `USER PROFILE:\n`
-        userCycleContext += `- Name: ${userName}\n`
+        userCycleContext += `- Name: ${trackedUserName}\n`
         userCycleContext += `- Email: ${dbUserWithData.email || 'not provided'}\n`
         
         // Get user's average period length from settings (default 5 days) - use this for all calculations
