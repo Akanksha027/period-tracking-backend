@@ -3,23 +3,13 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 import prisma from '../lib/prisma.js'
 import { clerk } from '../lib/clerk.js'
 import jwt from 'jsonwebtoken'
+import {
+  calculateCycleInfo,
+  fromLocalDayNumber,
+  inferTimezoneOffsetFromPeriods,
+} from '../utils/cycleInfo.js'
 
 const router = express.Router()
-
-const MS_PER_DAY = 1000 * 60 * 60 * 24
-
-function toUTCDate(input) {
-  if (!input) return null
-  const date = input instanceof Date ? input : new Date(input)
-  if (Number.isNaN(date.getTime())) return null
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()))
-}
-
-function addDaysUTC(date, days) {
-  const result = new Date(date.getTime())
-  result.setUTCDate(result.getUTCDate() + days)
-  return result
-}
 
 /**
  * Middleware to verify Clerk JWT token (reused from user.js)
@@ -159,6 +149,18 @@ async function findUserByClerkId(clerkId) {
     console.error('[Chat] Error finding user:', error)
     return null
   }
+}
+
+function resolveTimezoneOffset(req, periods) {
+  const header = req.headers?.['x-timezone-offset']
+  const headerValue = Array.isArray(header) ? header[0] : header
+  if (headerValue !== undefined) {
+    const parsed = parseInt(headerValue, 10)
+    if (!Number.isNaN(parsed)) {
+      return parsed
+    }
+  }
+  return inferTimezoneOffsetFromPeriods(periods)
 }
 
 /**
@@ -427,132 +429,70 @@ CRITICAL RULES:
             }
           }
           
-          const todayUTC = toUTCDate(new Date())
-
-          // Calculate cycle length from history or settings
-          const avgCycleLength = (() => {
-            if (dbUserWithData.periods.length >= 2) {
-              const cycles = []
-              for (let i = 0; i < dbUserWithData.periods.length - 1; i++) {
-                const current = new Date(dbUserWithData.periods[i].startDate)
-                const next = new Date(dbUserWithData.periods[i + 1].startDate)
-                const diff = Math.abs(Math.ceil((current.getTime() - next.getTime()) / (1000 * 60 * 60 * 24)))
-                cycles.push(diff)
-              }
-              const avg = Math.round(cycles.reduce((a, b) => a + b, 0) / cycles.length)
-              return avg > 0 ? avg : (dbUserWithData.settings?.averageCycleLength || 28)
-            }
-            return dbUserWithData.settings?.averageCycleLength || 28
-          })()
-
-          // Get last period end date
-          const lastPeriod = dbUserWithData.periods[0]
-          const lastPeriodStart = toUTCDate(lastPeriod.startDate)
-
-          let lastPeriodEnd = null
-          if (lastPeriod.endDate) {
-            lastPeriodEnd = toUTCDate(lastPeriod.endDate)
-          } else {
-            lastPeriodEnd = addDaysUTC(lastPeriodStart, userPeriodLength - 1)
-          }
-
-          // Check if currently on period
-          const activePeriod = dbUserWithData.periods.find(period => {
-            const startUTC = toUTCDate(period.startDate)
-            if (!startUTC) return false
-
-            const endUTC = period.endDate
-              ? toUTCDate(period.endDate)
-              : addDaysUTC(startUTC, userPeriodLength - 1)
-
-            return startUTC.getTime() <= todayUTC.getTime() && endUTC.getTime() >= todayUTC.getTime()
+          const inferredOffset = resolveTimezoneOffset(req, dbUserWithData.periods)
+          const cycleInfo = calculateCycleInfo(dbUserWithData.periods, dbUserWithData.settings, {
+            today: new Date(),
+            timezoneOffsetMinutes: inferredOffset,
           })
 
-          // Calculate current cycle day and phase
           let currentCycleDay = null
           let currentPhase = null
           let cycleDayDescription = ''
+          let daysUntilNextPeriod = null
+          let nextPeriodPredicted = null
 
-          if (activePeriod) {
-            // Currently on period (Menstrual Phase)
-            const periodStartUTC = toUTCDate(activePeriod.startDate)
-            if (!periodStartUTC) {
-              userCycleContext += `\n- CURRENT CYCLE STATUS:\n  • Unable to determine current period start date\n`
-            } else {
-              const periodEndUTC = activePeriod.endDate
-                ? toUTCDate(activePeriod.endDate)
-                : addDaysUTC(periodStartUTC, userPeriodLength - 1)
+          if (cycleInfo) {
+            currentCycleDay = cycleInfo.cycleDay
+            currentPhase = cycleInfo.phase
+            cycleDayDescription = cycleInfo.phaseDescription
+            nextPeriodPredicted = cycleInfo.nextPeriodDate
+            if (cycleInfo.nextPeriodDayNumber !== null && cycleInfo.todayDayNumber !== null) {
+              daysUntilNextPeriod = cycleInfo.nextPeriodDayNumber - cycleInfo.todayDayNumber
+            }
+          }
 
-              const diff = Math.floor((todayUTC.getTime() - periodStartUTC.getTime()) / MS_PER_DAY)
-              const daysInPeriod = diff + 1
-              const totalPeriodDays = Math.floor((periodEndUTC.getTime() - periodStartUTC.getTime()) / MS_PER_DAY) + 1
+          const avgCycleLength = cycleInfo?.avgCycleLength || dbUserWithData.settings?.averageCycleLength || 28
+          const periodStartLocal = cycleInfo?.periodStartDayNumber != null
+            ? fromLocalDayNumber(cycleInfo.periodStartDayNumber, inferredOffset)
+            : null
+          const periodEndLocal = cycleInfo?.periodEndDayNumber != null
+            ? fromLocalDayNumber(cycleInfo.periodEndDayNumber, inferredOffset)
+            : null
 
-              currentCycleDay = daysInPeriod
-              currentPhase = 'Menstrual'
-              cycleDayDescription = `Day ${daysInPeriod} of ${totalPeriodDays} of period (Menstrual Phase)`
-
-              userCycleContext += `\n- CURRENT CYCLE STATUS:\n`
-              userCycleContext += `  • Phase: Menstrual (Period)\n`
-              userCycleContext += `  • Cycle Day: ${daysInPeriod} (Day ${daysInPeriod} of period)\n`
-              userCycleContext += `  • Period Started: ${periodStartUTC.toLocaleDateString()}\n`
-              userCycleContext += `  • Period Ends: ${periodEndUTC.toLocaleDateString()}\n`
-              userCycleContext += `  • Total Period Days: ${totalPeriodDays}\n`
+          if (cycleInfo?.isOnPeriod) {
+            const totalPeriodDays = cycleInfo.periodEndDayNumber - cycleInfo.periodStartDayNumber + 1
+            userCycleContext += `\n- CURRENT CYCLE STATUS:\n`
+            userCycleContext += `  • Phase: Menstrual (Period)\n`
+            userCycleContext += `  • Cycle Day: ${cycleInfo.cycleDay} (Day ${cycleInfo.cycleDay} of period)\n`
+            if (periodStartLocal) {
+              userCycleContext += `  • Period Started: ${periodStartLocal.toLocaleDateString()}\n`
+            }
+            if (periodEndLocal) {
+              userCycleContext += `  • Period Ends: ${periodEndLocal.toLocaleDateString()}\n`
+            }
+            userCycleContext += `  • Total Period Days: ${totalPeriodDays}\n`
+          } else if (cycleInfo) {
+            userCycleContext += `\n- CURRENT CYCLE STATUS:\n`
+            userCycleContext += `  • Phase: ${cycleInfo.phase}\n`
+            userCycleContext += `  • Cycle Day: ${cycleInfo.cycleDay} of ${cycleInfo.avgCycleLength}\n`
+            if (periodStartLocal && periodEndLocal) {
+              userCycleContext += `  • Last Period: ${periodStartLocal.toLocaleDateString()} to ${periodEndLocal.toLocaleDateString()}\n`
+              const daysSinceEnd = cycleInfo.todayDayNumber - cycleInfo.periodEndDayNumber
+              userCycleContext += `  • Days Since Period Ended: ${daysSinceEnd}\n`
             }
           } else {
-            // Calculate days since last period ended
-            const daysSinceLastPeriodEnd = Math.floor((todayUTC.getTime() - lastPeriodEnd.getTime()) / MS_PER_DAY)
+            userCycleContext += `\n- CURRENT CYCLE STATUS:\n  • Unable to calculate cycle data (missing recent period logs)\n`
+          }
 
-            if (daysSinceLastPeriodEnd >= 0) {
-              // Calculate cycle day (day 1 is first day of period, so day after period ends is day after period length)
-              currentCycleDay = daysSinceLastPeriodEnd + 1 + userPeriodLength
-
-              // Determine phase based on cycle day
-              // Menstrual: Days 1-5 (period)
-              // Follicular: Days 6-13 (after period, before ovulation)
-              // Ovulation: Days 14-15 (around day 14)
-              // Luteal: Days 16-28+ (after ovulation, before next period)
-
-              if (currentCycleDay <= userPeriodLength) {
-                currentPhase = 'Menstrual'
-              } else if (currentCycleDay <= 13) {
-                currentPhase = 'Follicular'
-              } else if (currentCycleDay <= 15) {
-                currentPhase = 'Ovulation'
-              } else {
-                currentPhase = 'Luteal'
-              }
-
-              // Adjust for user's actual cycle length
-              const ovulationDay = Math.round(avgCycleLength / 2)
-              const fertileStart = ovulationDay - 5
-              const fertileEnd = ovulationDay
-
-              if (currentCycleDay > userPeriodLength && currentCycleDay < fertileStart) {
-                currentPhase = 'Follicular'
-              } else if (currentCycleDay >= fertileStart && currentCycleDay <= fertileEnd) {
-                currentPhase = 'Ovulation'
-              } else if (currentCycleDay > fertileEnd) {
-                currentPhase = 'Luteal'
-              }
-
-              cycleDayDescription = `Day ${currentCycleDay} of ${avgCycleLength}-day cycle (${currentPhase} Phase)`
-
-              userCycleContext += `\n- CURRENT CYCLE STATUS:\n`
-              userCycleContext += `  • Phase: ${currentPhase}\n`
-              userCycleContext += `  • Cycle Day: ${currentCycleDay} of ${avgCycleLength}\n`
-              userCycleContext += `  • Last Period: ${lastPeriodStart.toLocaleDateString()} to ${lastPeriodEnd.toLocaleDateString()}\n`
-              userCycleContext += `  • Days Since Period Ended: ${daysSinceLastPeriodEnd}\n`
+          if (nextPeriodPredicted) {
+            const daysUntil = daysUntilNextPeriod != null ? Math.max(daysUntilNextPeriod, 0) : null
+            userCycleContext += `  • Next Period Predicted: ${nextPeriodPredicted.toLocaleDateString()}`
+            if (daysUntil !== null) {
+              userCycleContext += ` (${daysUntil} days away)`
             }
+            userCycleContext += `\n`
           }
 
-          // Next period prediction
-          if (avgCycleLength) {
-            const nextPeriodPredicted = addDaysUTC(lastPeriodEnd, avgCycleLength)
-            const daysUntilNextPeriod = Math.floor((nextPeriodPredicted.getTime() - todayUTC.getTime()) / MS_PER_DAY)
-
-            userCycleContext += `  • Next Period Predicted: ${nextPeriodPredicted.toLocaleDateString()} (${daysUntilNextPeriod} days away)\n`
-          }
-          
           userCycleContext += `\n- IMPORTANT CYCLE INFORMATION:\n`
           userCycleContext += `  • Current Status: ${cycleDayDescription || 'Unable to calculate'}\n`
           userCycleContext += `  • Average Cycle Length: ${avgCycleLength} days\n`
