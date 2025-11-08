@@ -525,7 +525,6 @@ CRITICAL RULES:
         
         if (hasSymptomData && dbUserWithData.symptoms) {
           userCycleContext += `\nSYMPTOM TRACKING (${dbUserWithData.symptoms.length} entries - COMPLETE HISTORY):\n`
-          
           const timezoneOffset = inferredOffset
           const symptomsWithLocalDate = dbUserWithData.symptoms
             .map((s) => {
