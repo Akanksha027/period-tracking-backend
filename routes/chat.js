@@ -242,6 +242,7 @@ router.post('/', verifyClerkAuth, async (req, res) => {
     }
 
     const trackedUserName = dbUserWithData.name || viewerRecord?.viewedUser?.name || req.user.firstName || 'there'
+    const userName = trackedUserName
     const viewerName =
       req.user.firstName ||
       viewerRecord?.name ||
