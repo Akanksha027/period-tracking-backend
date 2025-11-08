@@ -201,7 +201,9 @@ router.post('/', verifyClerkAuth, async (req, res) => {
     // Find viewer record (could be SELF or OTHER)
     const viewerRecord = await prisma.user.findFirst({
       where: { clerkId: req.user.clerkId },
-      include: { viewedUser: true },
+      include: {
+        viewedUser: true,
+      },
     })
 
     // Find user in database (SELF target when viewer)
