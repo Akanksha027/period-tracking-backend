@@ -105,14 +105,16 @@ export function calculateCycleInfo(periods, settings, options = {}) {
   }
 
   const currentCycleDay = daysSincePeriodEnd + 1 + periodLength;
-  const ovulationDay = Math.round(avgCycleLength / 2);
-  const fertileStart = ovulationDay - 5;
-  const fertileEnd = ovulationDay;
+  const ovulationDay = Math.max(periodLength + 1, Math.round(avgCycleLength / 2));
 
   let phase = 'Follicular';
-  if (currentCycleDay >= fertileStart && currentCycleDay <= fertileEnd) {
+  if (currentCycleDay <= periodLength) {
+    phase = 'Menstrual';
+  } else if (currentCycleDay < ovulationDay) {
+    phase = 'Follicular';
+  } else if (currentCycleDay === ovulationDay) {
     phase = 'Ovulation';
-  } else if (currentCycleDay > fertileEnd) {
+  } else {
     phase = 'Luteal';
   }
 

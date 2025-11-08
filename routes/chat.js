@@ -11,6 +11,19 @@ import {
 
 const router = express.Router()
 
+const PHASE_EDUCATION = `
+MENSTRUAL CYCLE REFERENCE:
+• Menstrual Phase: Estrogen and progesterone are lowest; uterine lining sheds. Encourage rest, warmth, iron-rich meals, gentle movement.
+• Follicular Phase: FSH matures follicles, estrogen rises, uterine lining rebuilds. Energy and mood often improve—support planning, learning, moderate exercise.
+• Ovulation Phase: A sharp LH surge releases the mature egg. Estrogen peaks; fertility is highest. Emphasize hydration, mindful activity, communication about conception intentions.
+• Luteal Phase: Corpus luteum produces progesterone to sustain the uterine lining. Watch for PMS, recommend balanced nutrition, magnesium-rich foods, stress management.
+Hormone roles:
+• FSH matures ovarian follicles and promotes estrogen.
+• LH triggers ovulation and supports corpus luteum formation.
+• Estrogen regrows the endometrium during the proliferative (follicular) stage.
+• Progesterone from the corpus luteum stabilizes the endometrium during the secretory (luteal) stage.
+Align all explanations with these evidence-based definitions.`
+
 /**
  * Middleware to verify Clerk JWT token (reused from user.js)
  */
@@ -360,6 +373,7 @@ CRITICAL RULES:
         const userPeriodLength = dbUserWithData.settings?.periodDuration || 
                                  dbUserWithData.settings?.averagePeriodLength || 
                                  5
+        userCycleContext += PHASE_EDUCATION
         
         // Period Data
         if (hasPeriodData && dbUserWithData.periods) {
