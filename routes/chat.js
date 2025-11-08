@@ -529,11 +529,29 @@ CRITICAL RULES:
           const timezoneOffset = inferredOffset
           const symptomsWithLocalDate = dbUserWithData.symptoms
             .map((s) => {
-              const localDay = getLocalDayNumber(s.date, timezoneOffset)
-              const localDate = fromLocalDayNumber(localDay, timezoneOffset)
-              return { raw: s, localDay, localDate }
+              const initialDay = getLocalDayNumber(s.date, timezoneOffset)
+              const initialLocalDate = fromLocalDayNumber(initialDay, timezoneOffset)
+              const effectiveDateCandidate = initialLocalDate instanceof Date && !Number.isNaN(initialLocalDate.getTime())
+                ? initialLocalDate
+                : new Date(s.date)
+
+              if (!(effectiveDateCandidate instanceof Date) || Number.isNaN(effectiveDateCandidate.getTime())) {
+                return null
+              }
+
+              const effectiveDayNumber = initialDay ?? getLocalDayNumber(effectiveDateCandidate, timezoneOffset)
+
+              if (effectiveDayNumber === null) {
+                return null
+              }
+
+              return {
+                raw: s,
+                localDay: effectiveDayNumber,
+                localDate: effectiveDateCandidate,
+              }
             })
-            .filter((entry) => entry.localDay !== null && entry.localDate instanceof Date && !Number.isNaN(entry.localDate.getTime()))
+            .filter(Boolean)
           
           const symptomCounts = {}
           const symptomCycleCorrelation = {}
@@ -638,11 +656,29 @@ CRITICAL RULES:
           const moodCycleCorrelation = {}
           const moodWithLocalDate = dbUserWithData.moods
             .map((m) => {
-              const localDay = getLocalDayNumber(m.date, inferredOffset)
-              const localDate = fromLocalDayNumber(localDay, inferredOffset)
-              return { raw: m, localDay, localDate }
+              const initialDay = getLocalDayNumber(m.date, inferredOffset)
+              const initialLocalDate = fromLocalDayNumber(initialDay, inferredOffset)
+              const effectiveDateCandidate = initialLocalDate instanceof Date && !Number.isNaN(initialLocalDate.getTime())
+                ? initialLocalDate
+                : new Date(m.date)
+
+              if (!(effectiveDateCandidate instanceof Date) || Number.isNaN(effectiveDateCandidate.getTime())) {
+                return null
+              }
+
+              const effectiveDayNumber = initialDay ?? getLocalDayNumber(effectiveDateCandidate, inferredOffset)
+
+              if (effectiveDayNumber === null) {
+                return null
+              }
+
+              return {
+                raw: m,
+                localDay: effectiveDayNumber,
+                localDate: effectiveDateCandidate,
+              }
             })
-            .filter((entry) => entry.localDay !== null && entry.localDate instanceof Date && !Number.isNaN(entry.localDate.getTime()))
+            .filter(Boolean)
           
           moodWithLocalDate.forEach(({ raw: m, localDay, localDate }) => {
             moodCounts[m.type] = (moodCounts[m.type] || 0) + 1
