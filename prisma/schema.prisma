@@ -38,6 +38,8 @@ model User {
   settings      UserSettings?
   otpCodes      OtpCode[]
   reminders     Reminder[]
+  pushTokens    PushToken[]
+  notificationLogs NotificationLog[]
   
   @@index([userType])
   @@index([viewedUserId])
@@ -176,4 +178,54 @@ model Reminder {
   
   @@index([userId, sentAt])
   @@map("reminders")
+}
+
+model PushToken {
+  id                  String    @id @default(uuid())
+  userId              String    @map("user_id")
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expoPushToken       String    @unique @map("expo_push_token")
+  deviceType          String    @map("device_type")
+  mode                UserType  @map("mode")
+  viewedUserId        String?   @map("viewed_user_id")
+  timezoneOffsetMinutes Int     @default(0) @map("timezone_offset_minutes")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@index([viewedUserId])
+  @@map("push_tokens")
+}
+
+enum NotificationAudience {
+  SELF
+  VIEWER
+}
+
+enum NotificationCategory {
+  PERIOD_COUNTDOWN
+  PHASE_UPDATE
+  SYMPTOM_PROMPT
+  AI_TIP
+  WORKOUT
+  SYMPTOM_ALERT
+  MOOD_SUPPORT
+  VIEWER_TIP
+}
+
+model NotificationLog {
+  id            String                 @id @default(uuid())
+  userId        String                 @map("user_id")
+  user          User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  audience      NotificationAudience   @map("audience")
+  category      NotificationCategory   @map("category")
+  message       String
+  metadata      Json?                  @map("metadata")
+  viewerUserId  String?                @map("viewer_user_id")
+  sentAt        DateTime               @default(now()) @map("sent_at")
+  createdAt     DateTime               @default(now()) @map("created_at")
+
+  @@index([userId, audience, category, sentAt])
+  @@index([viewerUserId])
+  @@map("notification_logs")
 }

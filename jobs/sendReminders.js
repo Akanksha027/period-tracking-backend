@@ -49,6 +49,14 @@ function calculateCycleInfo(periods, settings, todayInput) {
     return null
   }
 
+  const ovulationDay = Math.max(1, Math.round(avgCycleLength / 2))
+  const fertileStart = Math.max(1, ovulationDay - 5)
+  const fertileEnd = Math.max(fertileStart, ovulationDay)
+  const nextPeriodDate = addDaysUTC(lastPeriodStart, avgCycleLength)
+  const ovulationDate = addDaysUTC(lastPeriodStart, ovulationDay - 1)
+  const fertileWindowStartDate = addDaysUTC(lastPeriodStart, fertileStart - 1)
+  const fertileWindowEndDate = addDaysUTC(lastPeriodStart, fertileEnd - 1)
+
   let lastPeriodEnd = null
   if (lastPeriod?.endDate) {
     lastPeriodEnd = toUTCDate(lastPeriod.endDate)
@@ -82,6 +90,12 @@ function calculateCycleInfo(periods, settings, todayInput) {
       phase: 'Menstrual',
       phaseDescription: `Day ${daysInPeriod} of period`,
       isOnPeriod: true,
+      periodStartDate: periodStartUTC,
+      periodEndDate: lastPeriodEnd,
+      nextPeriodDate,
+      ovulationDate,
+      fertileWindowStartDate,
+      fertileWindowEndDate,
     }
   }
 
@@ -89,10 +103,6 @@ function calculateCycleInfo(periods, settings, todayInput) {
 
   if (daysSinceLastPeriodEnd >= 0) {
     const currentCycleDay = daysSinceLastPeriodEnd + 1 + userPeriodLength
-
-    const ovulationDay = Math.round(avgCycleLength / 2)
-    const fertileStart = ovulationDay - 5
-    const fertileEnd = ovulationDay
 
     let phase = 'Follicular'
     if (currentCycleDay >= fertileStart && currentCycleDay <= fertileEnd) {
@@ -106,6 +116,12 @@ function calculateCycleInfo(periods, settings, todayInput) {
       phase,
       phaseDescription: `Day ${currentCycleDay} of ${avgCycleLength}-day cycle (${phase} Phase)`,
       isOnPeriod: false,
+      periodStartDate: lastPeriodStart,
+      periodEndDate: lastPeriodEnd,
+      nextPeriodDate,
+      ovulationDate,
+      fertileWindowStartDate,
+      fertileWindowEndDate,
     }
   }
 

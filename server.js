@@ -9,6 +9,7 @@ import symptomsRoutes from './routes/symptoms.js'
 import moodsRoutes from './routes/moods.js'
 import chatRoutes from './routes/chat.js'
 import reminderRoutes from './routes/reminders.js'
+import notificationRoutes from './routes/notifications.js'
 
 // Verify chat route is loaded
 if (!chatRoutes) {
@@ -69,6 +70,10 @@ app.get('/', (req, res) => {
         status: 'GET /api/reminders/status',
         test: 'GET /api/reminders/test?email=your-email@example.com',
       },
+      notifications: {
+        register: 'POST /api/notifications/register-token',
+        unregister: 'DELETE /api/notifications/register-token',
+      },
     },
   })
 })
@@ -87,10 +92,12 @@ app.use('/api/symptoms', symptomsRoutes)
 app.use('/api/moods', moodsRoutes)
 app.use('/api/chat', chatRoutes)
 app.use('/api/reminders', reminderRoutes)
+app.use('/api/notifications', notificationRoutes)
 
 // Log that chat route is registered
 console.log('[Server] Chat route registered at /api/chat')
 console.log('[Server] Reminder routes registered at /api/reminders')
+console.log('[Server] Notification routes registered at /api/notifications')
 
 // 404 handler
 app.use((req, res) => {

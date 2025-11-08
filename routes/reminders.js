@@ -21,6 +21,47 @@ function addDaysUTC(date, days) {
   return result
 }
 
+function formatDisplayDate(input) {
+  if (!input) return 'unknown'
+  const date = input instanceof Date ? new Date(input) : new Date(input)
+  if (Number.isNaN(date.getTime())) return 'unknown'
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+function buildDailyHistory(entries = [], formatEntry, maxDays = 7) {
+  if (!entries || entries.length === 0) {
+    return 'None logged recently.'
+  }
+
+  const grouped = new Map()
+  for (const entry of entries) {
+    if (!entry?.date) continue
+    const day = new Date(entry.date)
+    if (Number.isNaN(day.getTime())) continue
+    day.setHours(0, 0, 0, 0)
+    const key = day.toISOString()
+    if (!grouped.has(key)) {
+      grouped.set(key, [])
+    }
+    grouped.get(key).push(entry)
+  }
+
+  if (grouped.size === 0) {
+    return 'None logged recently.'
+  }
+
+  const summaries = Array.from(grouped.entries())
+    .sort((a, b) => new Date(b[0]).getTime() - new Date(a[0]).getTime())
+    .slice(0, maxDays)
+    .map(([iso, list]) => {
+      const label = formatDisplayDate(new Date(iso))
+      const values = list.map(formatEntry).filter(Boolean)
+      return values.length > 0 ? `${label}: ${values.join(', ')}` : `${label}: none`
+    })
+
+  return summaries.join('\n')
+}
+
 /**
  * Middleware to verify Clerk JWT token (reused from user.js)
  */
@@ -170,6 +211,14 @@ function calculateCycleInfo(periods, settings, todayInput) {
     return null
   }
 
+  const ovulationDay = Math.max(1, Math.round(avgCycleLength / 2))
+  const fertileStart = Math.max(1, ovulationDay - 5)
+  const fertileEnd = Math.max(fertileStart, ovulationDay)
+  const nextPeriodDate = addDaysUTC(lastPeriodStart, avgCycleLength)
+  const ovulationDate = addDaysUTC(lastPeriodStart, ovulationDay - 1)
+  const fertileWindowStartDate = addDaysUTC(lastPeriodStart, fertileStart - 1)
+  const fertileWindowEndDate = addDaysUTC(lastPeriodStart, fertileEnd - 1)
+
   let lastPeriodEnd = null
   if (lastPeriod?.endDate) {
     lastPeriodEnd = toUTCDate(lastPeriod.endDate)
@@ -201,6 +250,12 @@ function calculateCycleInfo(periods, settings, todayInput) {
       phase: 'Menstrual',
       phaseDescription: `Day ${daysInPeriod} of period`,
       isOnPeriod: true,
+      periodStartDate: periodStartUTC,
+      periodEndDate: lastPeriodEnd,
+      nextPeriodDate,
+      ovulationDate,
+      fertileWindowStartDate,
+      fertileWindowEndDate,
     }
   }
 
@@ -208,10 +263,6 @@ function calculateCycleInfo(periods, settings, todayInput) {
 
   if (daysSinceLastPeriodEnd >= 0) {
     const currentCycleDay = daysSinceLastPeriodEnd + 1 + userPeriodLength
-
-    const ovulationDay = Math.round(avgCycleLength / 2)
-    const fertileStart = ovulationDay - 5
-    const fertileEnd = ovulationDay
 
     let phase = 'Follicular'
     if (currentCycleDay >= fertileStart && currentCycleDay <= fertileEnd) {
@@ -225,6 +276,12 @@ function calculateCycleInfo(periods, settings, todayInput) {
       phase,
       phaseDescription: `Day ${currentCycleDay} of ${avgCycleLength}-day cycle (${phase} Phase)`,
       isOnPeriod: false,
+      periodStartDate: lastPeriodStart,
+      periodEndDate: lastPeriodEnd,
+      nextPeriodDate,
+      ovulationDate,
+      fertileWindowStartDate,
+      fertileWindowEndDate,
     }
   }
 
@@ -308,21 +365,147 @@ router.post('/generate', verifyClerkAuth, async (req, res) => {
       })
     }
 
-    // Build context for AI
-    const userName = dbUserWithData.name || req.user.firstName || 'there'
-    const todaySymptoms = dbUserWithData.symptoms.map(s => s.type).join(', ') || 'none'
-    const todayMoods = dbUserWithData.moods.map(m => m.type).join(', ') || 'none'
+    const todayLocal = new Date()
+    todayLocal.setHours(0, 0, 0, 0)
+    const tomorrowLocal = new Date(todayLocal)
+    tomorrowLocal.setDate(tomorrowLocal.getDate() + 1)
 
-    const context = `
-User: ${userName}
-Current Phase: ${cycleInfo.phase}
-Cycle Day: ${cycleInfo.cycleDay}
-Phase Description: ${cycleInfo.phaseDescription}
-Today's Symptoms: ${todaySymptoms}
-Today's Moods: ${todayMoods}
-Average Cycle Length: ${dbUserWithData.settings?.averageCycleLength || 28} days
-Average Period Length: ${dbUserWithData.settings?.periodDuration || dbUserWithData.settings?.averagePeriodLength || 5} days
-`
+    const historyStart = new Date(todayLocal)
+    historyStart.setDate(historyStart.getDate() - 13)
+
+    const [recentSymptoms, recentMoods, recentNotes] = await Promise.all([
+      prisma.symptom.findMany({
+        where: {
+          userId: dbUser.id,
+          date: {
+            gte: historyStart,
+            lt: tomorrowLocal,
+          },
+        },
+        orderBy: { date: 'desc' },
+        take: 200,
+      }),
+      prisma.mood.findMany({
+        where: {
+          userId: dbUser.id,
+          date: {
+            gte: historyStart,
+            lt: tomorrowLocal,
+          },
+        },
+        orderBy: { date: 'desc' },
+        take: 200,
+      }),
+      prisma.note.findMany({
+        where: {
+          userId: dbUser.id,
+          date: {
+            gte: historyStart,
+            lt: tomorrowLocal,
+          },
+        },
+        orderBy: { date: 'desc' },
+        take: 50,
+      }),
+    ])
+
+    const periodHistory = dbUserWithData.periods
+      .map((period) => {
+        const start = formatDisplayDate(period.startDate)
+        let end = 'ongoing'
+        if (period.endDate) {
+          end = formatDisplayDate(period.endDate)
+        } else if (dbUserWithData.settings?.periodDuration) {
+          const estimatedEnd = addDaysUTC(
+            toUTCDate(period.startDate),
+            dbUserWithData.settings.periodDuration - 1
+          )
+          end = `${formatDisplayDate(estimatedEnd)} (estimated)`
+        }
+        return `${start} – ${end}`
+      })
+      .join('\n')
+
+    const phaseTimeline = (() => {
+      const daysToShow = 7
+      const lines = []
+      for (let offset = daysToShow - 1; offset >= 0; offset--) {
+        const day = new Date(todayLocal)
+        day.setDate(day.getDate() - offset)
+        const infoForDay = calculateCycleInfo(dbUserWithData.periods, dbUserWithData.settings, toUTCDate(day))
+        if (infoForDay) {
+          lines.push(
+            `${formatDisplayDate(day)}: ${infoForDay.phase} (cycle day ${infoForDay.cycleDay})`
+          )
+        } else {
+          lines.push(`${formatDisplayDate(day)}: No cycle data available`)
+        }
+      }
+      return lines.join('\n')
+    })()
+
+    const symptomHistory = buildDailyHistory(
+      recentSymptoms,
+      (entry) =>
+        entry.severity
+          ? `${entry.type} (severity ${entry.severity})`
+          : entry.type
+    )
+
+    const moodHistory = buildDailyHistory(recentMoods, (entry) => entry.type)
+
+    const noteHistory = buildDailyHistory(
+      recentNotes,
+      (entry) => (entry.content ? `"${entry.content.trim()}"` : null)
+    )
+
+    const userName = dbUserWithData.name || req.user.firstName || 'there'
+    const todaySymptoms =
+      dbUserWithData.symptoms.length > 0
+        ? dbUserWithData.symptoms
+            .map((s) =>
+              s.severity
+                ? `${s.type} (severity ${s.severity})`
+                : s.type
+            )
+            .join(', ')
+        : 'none'
+    const todayMoods =
+      dbUserWithData.moods.length > 0
+        ? dbUserWithData.moods.map((m) => m.type).join(', ')
+        : 'none'
+
+    const contextSections = [
+      `USER OVERVIEW:
+- Name: ${userName}
+- Current Phase: ${cycleInfo.phase}
+- Cycle Day: ${cycleInfo.cycleDay}
+- Phase Description: ${cycleInfo.phaseDescription}
+- Next Period Expected: ${formatDisplayDate(cycleInfo.nextPeriodDate)}
+- Fertility Window: ${formatDisplayDate(cycleInfo.fertileWindowStartDate)} – ${formatDisplayDate(cycleInfo.fertileWindowEndDate)}
+- Ovulation Day: ${formatDisplayDate(cycleInfo.ovulationDate)}
+- Average Cycle Length: ${dbUserWithData.settings?.averageCycleLength || 28} days
+- Average Period Length: ${
+        dbUserWithData.settings?.periodDuration ||
+        dbUserWithData.settings?.averagePeriodLength ||
+        5
+      } days`,
+      `PERIOD HISTORY (most recent):
+${periodHistory || 'No period history available.'}`,
+      `PHASE TIMELINE (last 7 days):
+${phaseTimeline}`,
+      `SYMPTOM HISTORY (last 14 days):
+${symptomHistory}`,
+      `MOOD HISTORY (last 14 days):
+${moodHistory}`,
+      `NOTES (last 14 days):
+${noteHistory}`,
+      `TODAY'S LOGS:
+- Symptoms: ${todaySymptoms}
+- Moods: ${todayMoods}`,
+    ]
+
+    const context = contextSections.join('\n\n')
 
     // Generate reminder using AI
     if (!process.env.GEMINI_API_KEY) {
@@ -429,6 +612,8 @@ router.get('/status', verifyClerkAuth, async (req, res) => {
       lastReminder: lastReminder ? {
         id: lastReminder.id,
         message: lastReminder.message,
+        phase: lastReminder.phase,
+        cycleDay: lastReminder.cycleDay,
         sentAt: lastReminder.sentAt,
       } : null,
     })
