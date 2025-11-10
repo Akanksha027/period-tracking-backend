@@ -1025,10 +1025,37 @@ router.post('/send-otp', async (req, res) => {
     }
 
     // Verify user exists in Clerk (for email sending)
-    const clerkUser = await clerk.users.getUser(selfUser.clerkId)
-    if (!clerkUser) {
+    let clerkUser = null
+    try {
+      if (!selfUser.clerkId) {
+        console.log('[Login For Other] SELF user missing clerkId, attempting lookup by email')
+        const users = await clerk.users.getUserList({ emailAddress: [normalizedEmail], limit: 1 })
+        const found = Array.isArray(users) ? users[0] : users?.data?.[0]
+        if (!found) {
+          return res.status(404).json({
+            error: 'User account not found in authentication system',
+            details: 'No Clerk user found for this email address.',
+          })
+        }
+        clerkUser = await clerk.users.getUser(found.id)
+        await prisma.user.update({
+          where: { id: selfUser.id },
+          data: { clerkId: found.id },
+        }).catch((updateError) => {
+          console.warn('[Login For Other] Unable to persist Clerk ID on user:', updateError?.message)
+        })
+      } else {
+        clerkUser = await clerk.users.getUser(selfUser.clerkId)
+      }
+    } catch (clerkError) {
+      console.error('[Login For Other] Clerk user lookup failed:', {
+        message: clerkError?.message,
+        status: clerkError?.status,
+        errors: clerkError?.errors,
+      })
       return res.status(404).json({
         error: 'User account not found in authentication system',
+        details: clerkError?.errors?.[0]?.message || clerkError?.message || 'Clerk user lookup failed.',
       })
     }
 
