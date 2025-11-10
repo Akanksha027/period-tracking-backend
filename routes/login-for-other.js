@@ -1032,18 +1032,17 @@ router.post('/send-otp', async (req, res) => {
         const users = await clerk.users.getUserList({ emailAddress: [normalizedEmail], limit: 1 })
         const found = Array.isArray(users) ? users[0] : users?.data?.[0]
         if (!found) {
-          return res.status(404).json({
-            error: 'User account not found in authentication system',
-            details: 'No Clerk user found for this email address.',
+          console.warn('[Login For Other] Clerk lookup by email returned no results; continuing with email-only flow')
+        }
+        if (found?.id) {
+          clerkUser = await clerk.users.getUser(found.id)
+          await prisma.user.update({
+            where: { id: selfUser.id },
+            data: { clerkId: found.id },
+          }).catch((updateError) => {
+            console.warn('[Login For Other] Unable to persist Clerk ID on user:', updateError?.message)
           })
         }
-        clerkUser = await clerk.users.getUser(found.id)
-        await prisma.user.update({
-          where: { id: selfUser.id },
-          data: { clerkId: found.id },
-        }).catch((updateError) => {
-          console.warn('[Login For Other] Unable to persist Clerk ID on user:', updateError?.message)
-        })
       } else {
         clerkUser = await clerk.users.getUser(selfUser.clerkId)
       }
@@ -1053,10 +1052,11 @@ router.post('/send-otp', async (req, res) => {
         status: clerkError?.status,
         errors: clerkError?.errors,
       })
-      return res.status(404).json({
-        error: 'User account not found in authentication system',
-        details: clerkError?.errors?.[0]?.message || clerkError?.message || 'Clerk user lookup failed.',
-      })
+      clerkUser = null
+    }
+
+    if (!clerkUser) {
+      console.warn('[Login For Other] Proceeding without Clerk confirmation; using stored email for OTP delivery')
     }
 
     // Generate OTP
