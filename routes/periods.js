@@ -228,10 +228,27 @@ router.post('/', async (req, res) => {
       return res.status(500).json({ error: 'Could not identify user in database' })
     }
 
+    // Get user settings to calculate endDate if not provided
+    let calculatedEndDate = endDate ? new Date(endDate) : null
+    if (!calculatedEndDate) {
+      const userSettings = await prisma.userSettings.findUnique({
+        where: { userId: dbUserId },
+      })
+      const periodLength = userSettings?.periodDuration || userSettings?.averagePeriodLength || 5
+      calculatedEndDate = new Date(startDate)
+      calculatedEndDate.setDate(calculatedEndDate.getDate() + periodLength - 1)
+      calculatedEndDate.setHours(23, 59, 59, 999)
+      console.log('[Periods] Calculated endDate from settings:', {
+        periodLength,
+        startDate: new Date(startDate).toISOString(),
+        endDate: calculatedEndDate.toISOString(),
+      })
+    }
+
     console.log('[Periods] Creating period with data:', {
       userId: dbUserId,
       startDate: new Date(startDate).toISOString(),
-      endDate: endDate ? new Date(endDate).toISOString() : null,
+      endDate: calculatedEndDate.toISOString(),
       flowLevel: flowLevel || null,
     })
 
@@ -239,7 +256,7 @@ router.post('/', async (req, res) => {
       data: {
         userId: dbUserId,
         startDate: new Date(startDate),
-        endDate: endDate ? new Date(endDate) : null,
+        endDate: calculatedEndDate,
         flowLevel: flowLevel || null,
       },
     })
