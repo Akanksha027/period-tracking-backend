@@ -95,7 +95,7 @@ router.post('/ai', async (req, res) => {
         const response = await axios.post(n8nWebhookUrl, {
             user_id: dbUserId
         }, {
-            timeout: 30000, // 30 second timeout
+            timeout: 60000, // 60 second timeout (AI takes ~45s)
             headers: {
                 'Content-Type': 'application/json'
             }
@@ -137,6 +137,22 @@ router.post('/ai', async (req, res) => {
  * GET /api/predictions/static
  * Get static predictions (fallback if AI is unavailable)
  */
+
+// Already configured in predictions.js
+router.post('/ai', async (req, res) => {
+    const dbUserId = await getDbUserId(req)
+
+    // Call n8n webhook
+    const response = await axios.post(
+        process.env.N8N_WEBHOOK_URL,
+        { user_id: dbUserId }
+    )
+
+    return res.json(response.data)
+})
+
+
+
 router.get('/static', async (req, res) => {
     try {
         const dbUserId = await getDbUserId(req)
