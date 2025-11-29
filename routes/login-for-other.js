@@ -51,7 +51,7 @@ async function sendOTPEmail(email, otp) {
     try {
       console.log('[OTP EMAIL] Attempting to send via Gmail SMTP...')
       const nodemailer = await import('nodemailer')
-      
+
       const transporter = nodemailer.createTransport({
         service: 'gmail',
         auth: {
@@ -138,7 +138,7 @@ ${otp}
       }
 
       const info = await transporter.sendMail(mailOptions)
-      
+
       console.log('[OTP EMAIL] ✅ Sent successfully via Gmail SMTP. Message ID:', info.messageId)
       return
     } catch (error) {
@@ -169,7 +169,7 @@ ${otp}
       console.log('[OTP EMAIL] Attempting to send via EmailJS...')
       // EmailJS uses fetch API for Node.js
       const emailjsUrl = `https://api.emailjs.com/api/v1.0/email/send`
-      
+
       const requestBody = {
         service_id: emailjsServiceId,
         template_id: emailjsTemplateId,
@@ -187,7 +187,7 @@ ${otp}
         user_id: emailjsPublicKey ? emailjsPublicKey.substring(0, 10) + '...' : 'missing',
         to_email: email,
       })
-      
+
       const response = await fetch(emailjsUrl, {
         method: 'POST',
         headers: {
@@ -213,9 +213,9 @@ ${otp}
         console.error('[OTP EMAIL] Failed to parse EmailJS response as JSON:', parseError)
         throw new Error(`EmailJS returned non-JSON response: ${responseText.substring(0, 200)}`)
       }
-      
+
       console.log('[OTP EMAIL] EmailJS parsed response:', result)
-      
+
       if (!response.ok) {
         throw new Error(result.text || result.message || result.error || 'EmailJS API error')
       }
@@ -251,18 +251,18 @@ ${otp}
   if (!emailjsServiceId || !emailjsTemplateId || !emailjsPublicKey) {
     console.log('[OTP EMAIL] EmailJS not fully configured, trying Resend fallback...')
     const resendApiKey = process.env.RESEND_API_KEY
-    
+
     if (resendApiKey && !resendApiKey.includes('xxxxxxxx') && resendApiKey !== 're_xxxxxxxxxxxxxxxxxxxxx') {
-    try {
-      const { Resend } = await import('resend')
-      const resend = new Resend(resendApiKey)
-      const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev'
-      
-      const result = await resend.emails.send({
-        from: fromEmail,
-        to: email,
-        subject: 'Login Verification Code - Period Tracker',
-        html: `
+      try {
+        const { Resend } = await import('resend')
+        const resend = new Resend(resendApiKey)
+        const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev'
+
+        const result = await resend.emails.send({
+          from: fromEmail,
+          to: email,
+          subject: 'Login Verification Code - Period Tracker',
+          html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #333;">Login Verification Code</h2>
             <p>Your verification code for "Login for Someone Else" is:</p>
@@ -273,24 +273,24 @@ ${otp}
             <p style="color: #666; font-size: 14px;">If you didn't request this code, please ignore this email.</p>
           </div>
         `,
-        text: `Your verification code is: ${otp}\n\nThis code expires in 10 minutes.\n\nIf you didn't request this, please ignore this email.`,
-      })
+          text: `Your verification code is: ${otp}\n\nThis code expires in 10 minutes.\n\nIf you didn't request this, please ignore this email.`,
+        })
 
-      if (result.error) {
-        if (result.error.statusCode === 403) {
-          console.error('[OTP EMAIL] ⚠️  Resend requires domain verification')
+        if (result.error) {
+          if (result.error.statusCode === 403) {
+            console.error('[OTP EMAIL] ⚠️  Resend requires domain verification')
+          }
+          throw new Error(`Resend API error: ${result.error.message}`)
         }
-        throw new Error(`Resend API error: ${result.error.message}`)
+
+        if (result.data) {
+          console.log('[OTP EMAIL] ✅ Sent successfully via Resend. Email ID:', result.data.id)
+          return
+        }
+      } catch (error) {
+        console.error('[OTP EMAIL] Resend error:', error)
+        // Fall through to console log
       }
-      
-      if (result.data) {
-        console.log('[OTP EMAIL] ✅ Sent successfully via Resend. Email ID:', result.data.id)
-        return
-      }
-    } catch (error) {
-      console.error('[OTP EMAIL] Resend error:', error)
-      // Fall through to console log
-    }
     }
   } else {
     console.log('[OTP EMAIL] Skipping Resend - EmailJS is configured (even if it failed)')
@@ -320,18 +320,18 @@ async function findUserByEmail(email) {
     console.log('[Login For Other] Original email received:', email)
     console.log('[Login For Other] Email type:', typeof email)
     console.log('[Login For Other] Email length:', email?.length)
-    
+
     const normalizedEmail = email.toLowerCase().trim()
     console.log('[Login For Other] Normalized email:', normalizedEmail)
     console.log('[Login For Other] Normalized email length:', normalizedEmail.length)
     console.log('[Login For Other] Normalized email bytes:', Buffer.from(normalizedEmail).toString('hex'))
-    
+
     // Verify email format
     if (!normalizedEmail.includes('@')) {
       console.error('[Login For Other] ERROR: Invalid email format - no @ symbol')
       return null
     }
-    
+
     if (!normalizedEmail.includes('.com') && !normalizedEmail.includes('.net') && !normalizedEmail.includes('.org')) {
       console.warn('[Login For Other] WARNING: Unusual email domain format')
     }
@@ -343,7 +343,7 @@ async function findUserByEmail(email) {
     })
     console.log('[Login For Other] Database lookup result:', dbUser ? `Found user ${dbUser.id}` : 'Not found in database')
 
-        // Search for user in Clerk by email
+    // Search for user in Clerk by email
     try {
       // Clerk SDK v4+ emailAddress filter doesn't work reliably, so we'll do manual search
       console.log('[Login For Other] Searching Clerk for email:', normalizedEmail)
@@ -351,7 +351,7 @@ async function findUserByEmail(email) {
       try {
         // Get users - Clerk SDK v4+ returns array directly
         const allUsersResponse = await clerk.users.getUserList({ limit: 500 })
-        
+
         // Normalize response
         let allUsers = null
         if (Array.isArray(allUsersResponse)) {
@@ -361,25 +361,25 @@ async function findUserByEmail(email) {
         } else {
           allUsers = []
         }
-        
+
         console.log('[Login For Other] Total users retrieved for manual search:', allUsers.length)
-        
+
         if (allUsers.length > 0) {
           console.log('[Login For Other] Starting manual search through', allUsers.length, 'users')
-          
+
           // Search through users by fetching full details and checking emails
           let matchedUser = null
           for (const user of allUsers) {
             try {
               // Get full user details to access emailAddresses
               const fullUser = await clerk.users.getUser(user.id)
-              
+
               if (fullUser.emailAddresses && fullUser.emailAddresses.length > 0) {
                 // Check each email address
                 for (const emailObj of fullUser.emailAddresses) {
                   const emailAddr = emailObj?.emailAddress?.toLowerCase()?.trim()
                   console.log('[Login For Other] Checking email:', emailAddr, 'against:', normalizedEmail, 'Match:', emailAddr === normalizedEmail)
-                  
+
                   if (emailAddr === normalizedEmail) {
                     matchedUser = fullUser
                     console.log('[Login For Other] User found via manual search:', {
@@ -390,14 +390,14 @@ async function findUserByEmail(email) {
                   }
                 }
               }
-              
+
               if (matchedUser) break
             } catch (userError) {
               // Skip if we can't fetch user details
               continue
             }
           }
-          
+
           console.log('[Login For Other] Manual search completed. Found match:', !!matchedUser)
 
           if (matchedUser) {
@@ -447,7 +447,7 @@ async function findUserByEmail(email) {
       console.error('[Login For Other] Error type:', clerkError?.constructor?.name || typeof clerkError)
       console.error('[Login For Other] Error message:', clerkError?.message)
       console.error('[Login For Other] Error stack:', clerkError?.stack)
-      
+
       // Check if Clerk client is properly initialized
       try {
         const clerkCheck = clerk
@@ -459,7 +459,7 @@ async function findUserByEmail(email) {
       } catch (checkError) {
         console.error('[Login For Other] Error checking Clerk client:', checkError)
       }
-      
+
       console.log('[Login For Other] ===== END findUserByEmail - ERROR =====')
       return null
     }
@@ -576,10 +576,10 @@ router.get('/test-clerk/:userId', async (req, res) => {
       res.status(500).json({ success: false, debug })
     }
   } catch (error) {
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       error: 'Internal server error',
-      details: error.message 
+      details: error.message
     })
   }
 })
@@ -618,7 +618,7 @@ router.get('/test-clerk', async (req, res) => {
       let usersResponse = null
       try {
         usersResponse = await clerk.users.getUserList({ limit: 100 })
-        
+
         // Clerk SDK v4+ returns an array directly, not { data: [...] }
         // Normalize to consistent structure
         let users = null
@@ -635,14 +635,14 @@ router.get('/test-clerk', async (req, res) => {
           // Unknown structure
           users = { data: [] }
         }
-        
+
         debug.apiCall = {
           success: true,
           responseType: typeof usersResponse,
           isArray: Array.isArray(usersResponse),
           normalizedUsersCount: users?.data?.length || 0,
         }
-        
+
         // Store normalized users for processing
         usersResponse = users
       } catch (apiError) {
@@ -658,7 +658,7 @@ router.get('/test-clerk', async (req, res) => {
       }
 
       debug.usersFound = usersResponse?.data?.length || 0
-      
+
       if (usersResponse?.data && usersResponse.data.length > 0) {
         // Extract all emails - need to fetch full user details to get emailAddresses
         for (const user of usersResponse.data.slice(0, 10)) {
@@ -672,7 +672,7 @@ router.get('/test-clerk', async (req, res) => {
                 }
               })
             }
-            
+
             // Add to sample users
             if (debug.sampleUsers.length < 5) {
               debug.sampleUsers.push({
@@ -700,10 +700,10 @@ router.get('/test-clerk', async (req, res) => {
       res.status(500).json({ success: false, debug })
     }
   } catch (error) {
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       error: 'Internal server error',
-      details: error.message 
+      details: error.message
     })
   }
 })
@@ -728,10 +728,10 @@ router.post('/verify-credentials', async (req, res) => {
     const { email } = req.body
 
     if (!email) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Email is required',
-        debug 
-      }) 
+        debug
+      })
     }
 
     debug.emailReceived = email
@@ -755,10 +755,10 @@ router.post('/verify-credentials', async (req, res) => {
     let users = null
     try {
       debug.clerkApiCalled = true
-      
+
       // Get all users (Clerk SDK v4+ returns array directly)
       const allUsersResponse = await clerk.users.getUserList({ limit: 500 })
-      
+
       // Normalize response - Clerk returns array directly
       let allUsers = null
       if (Array.isArray(allUsersResponse)) {
@@ -768,7 +768,7 @@ router.post('/verify-credentials', async (req, res) => {
       } else {
         allUsers = []
       }
-      
+
       debug.manualSearchResults = {
         totalRetrieved: allUsers.length,
         emailsChecked: [],
@@ -780,16 +780,16 @@ router.post('/verify-credentials', async (req, res) => {
         try {
           // Get full user details to access emailAddresses
           const fullUser = await clerk.users.getUser(user.id)
-          
+
           if (fullUser.emailAddresses && fullUser.emailAddresses.length > 0) {
             // Check each email address
             for (const emailObj of fullUser.emailAddresses) {
               const emailAddr = emailObj?.emailAddress?.toLowerCase()?.trim()
-              
+
               if (debug.manualSearchResults.emailsChecked.length < 10) {
                 debug.manualSearchResults.emailsChecked.push(emailAddr)
               }
-              
+
               if (emailAddr === normalizedEmail) {
                 matchedUser = fullUser
                 debug.manualSearchResults.matchFound = true
@@ -798,7 +798,7 @@ router.post('/verify-credentials', async (req, res) => {
               }
             }
           }
-          
+
           if (matchedUser) break
         } catch (userError) {
           // Skip if we can't fetch user details
@@ -823,89 +823,82 @@ router.post('/verify-credentials', async (req, res) => {
       const clerkUser = users.data[0]
       const userEmail = clerkUser.emailAddresses?.[0]?.emailAddress || normalizedEmail
 
-        // CRITICAL: Check if this user exists in our database
-        // Only 'SELF' users can be viewed by 'OTHER' users
-        // For now, we'll use a simple query that works even if userType column doesn't exist yet
-        let selfUser = null
-        try {
-          // Simple query - doesn't reference userType to avoid schema errors
-          selfUser = await prisma.user.findUnique({
-            where: { email: normalizedEmail },
-          })
-          
-          // If user exists, check userType (only if column exists)
-          if (selfUser) {
-            // Try to read userType - if column doesn't exist, it will be undefined
-            const userType = selfUser.userType
-            
-            // If userType exists and is 'OTHER', reject (only SELF users can be viewed)
-            if (userType === 'OTHER') {
-              debug.finalResult = 'USER_IS_OTHER_TYPE'
-              return res.status(400).json({
-                success: false,
-                error: 'This account is a viewer account. Only "Login for Yourself" accounts can be viewed.',
-                debug,
-              })
-            }
-            
-            // If userType is null/undefined or 'SELF', allow access
-            // All existing users (without userType) are treated as SELF
-            if (!userType) {
-              // Try to update userType to SELF (will fail silently if column doesn't exist)
-              try {
-                await prisma.user.update({
-                  where: { id: selfUser.id },
-                  data: { userType: 'SELF' },
-                })
-                selfUser.userType = 'SELF'
-              } catch (updateError) {
-                // Column doesn't exist yet - that's okay, continue
-                console.log('[Login For Other] userType column may not exist yet:', updateError.message)
-                selfUser.userType = 'SELF' // Treat as SELF in memory
-              }
-            }
+      // CRITICAL: Check if this user exists in our database
+      // Only 'SELF' users can be viewed by 'OTHER' users
+      // For now, we'll use a simple query that works even if userType column doesn't exist yet
+      let selfUser = null
+      try {
+        // Simple query - doesn't reference userType to avoid schema errors
+        selfUser = await prisma.user.findUnique({
+          where: { email: normalizedEmail },
+        })
+
+        // If user exists, check userType (only if column exists)
+        if (selfUser) {
+          // Try to read userType - if column doesn't exist, it will be undefined
+          const userType = selfUser.userType
+
+          // If userType exists and is 'OTHER', reject (only SELF users can be viewed)
+          if (userType === 'OTHER') {
+            debug.finalResult = 'USER_IS_OTHER_TYPE'
+            return res.status(400).json({
+              success: false,
+              error: 'This account is a viewer account. Only "Login for Yourself" accounts can be viewed.',
+              debug,
+            })
           }
-        } catch (dbError) {
-          console.error('[Login For Other] Database query error:', dbError)
-          debug.dbError = {
-            message: dbError.message,
-            type: dbError.constructor?.name,
+
+          // STRICT: Only explicitly typed SELF accounts can be viewed
+          // Reject null userType and OTHER accounts
+          if (!userType || userType === 'OTHER') {
+            const errorMsg = !userType
+              ? 'Account type not set. Only verified SELF accounts can be viewed.'
+              : 'This is a viewer account. Only SELF accounts can be viewed.'
+            debug.finalResult = 'INVALID_USER_TYPE'
+            return res.status(400).json({
+              success: false,
+              error: errorMsg,
+              debug,
+            })
           }
-          // Continue to check if user was found
         }
+      } catch (dbError) {
+        console.error('[Login For Other] Database query error:', dbError)
+        debug.dbError = {
+          message: dbError.message,
+          type: dbError.constructor?.name,
+        }
+        // Continue to check if user was found
+      }
 
-        debug.selfUserCheck = {
-          found: !!selfUser,
-          userId: selfUser?.id,
-          userType: selfUser?.userType,
-        }
+      debug.selfUserCheck = {
+        found: !!selfUser,
+        userId: selfUser?.id,
+        userType: selfUser?.userType,
+      }
 
-        if (!selfUser) {
-          // User exists in Clerk but not in our database as 'SELF' user
-          // This means they haven't created a "Login for Yourself" account yet
-          debug.finalResult = 'USER_NOT_SELF_USER'
-          return res.status(404).json({
-            success: false,
-            error: 'No account found with this email address. The person must create an account first using "Login for Yourself".',
-            debug,
-          })
-        }
-        
-        // If userType is null or undefined, treat as SELF (backward compatibility)
-        if (!selfUser.userType) {
-          selfUser.userType = 'SELF'
-        }
-
-        // User exists as 'SELF' - ready for OTP verification
-        debug.finalResult = 'SELF_USER_FOUND'
-        return res.json({
-          success: true,
-          message: 'User found and ready for verification',
-          email: normalizedEmail,
-          userId: selfUser.id,
-          clerkId: clerkUser.id,
+      if (!selfUser) {
+        // User exists in Clerk but not in our database as 'SELF' user
+        // This means they haven't created a "Login for Yourself" account yet
+        debug.finalResult = 'USER_NOT_SELF_USER'
+        return res.status(404).json({
+          success: false,
+          error: 'No account found with this email address. The person must create an account first using "Login for Yourself".',
           debug,
         })
+      }
+
+
+      // User exists as 'SELF' - ready for OTP verification
+      debug.finalResult = 'SELF_USER_FOUND'
+      return res.json({
+        success: true,
+        message: 'User found and ready for verification',
+        email: normalizedEmail,
+        userId: selfUser.id,
+        clerkId: clerkUser.id,
+        debug,
+      })
     }
 
     // User not found in Clerk
@@ -922,7 +915,7 @@ router.post('/verify-credentials', async (req, res) => {
       type: error?.constructor?.name,
       stack: error?.stack,
     }
-    return res.status(500).json({ 
+    return res.status(500).json({
       success: false,
       error: 'Internal server error',
       details: error.message,
@@ -980,34 +973,20 @@ router.post('/send-otp', async (req, res) => {
 
     // CRITICAL: Find the SELF user (the person whose data will be viewed)
     // Only SELF users can be viewed by OTHER users
-    // Use simple query that works even if userType column doesn't exist yet
     let selfUser = null
     try {
       selfUser = await prisma.user.findUnique({
         where: { email: normalizedEmail },
       })
-      
+
       if (selfUser) {
-        // Check userType if it exists
-        if (selfUser.userType === 'OTHER') {
-          return res.status(400).json({
-            error: 'This account is a viewer account. Only "Login for Yourself" accounts can be viewed.',
-          })
-        }
-        
-        // If userType is null/undefined, treat as SELF and try to update
-        if (!selfUser.userType) {
-          try {
-            await prisma.user.update({
-              where: { id: selfUser.id },
-              data: { userType: 'SELF' },
-            })
-            selfUser.userType = 'SELF'
-          } catch (updateError) {
-            // Column doesn't exist yet - that's okay
-            console.log('[Login For Other] userType column may not exist yet:', updateError.message)
-            selfUser.userType = 'SELF' // Treat as SELF in memory
-          }
+        // STRICT: Only explicitly typed SELF accounts can be viewed
+        // Reject null userType and OTHER accounts
+        if (!selfUser.userType || selfUser.userType === 'OTHER') {
+          const errorMsg = !selfUser.userType
+            ? 'Account type not set. Only verified SELF accounts can be viewed.'
+            : 'This is a viewer account. Only SELF accounts can be viewed.'
+          return res.status(400).json({ error: errorMsg })
         }
       }
     } catch (dbError) {
@@ -1113,7 +1092,7 @@ router.post('/verify-otp', async (req, res) => {
 
     if (!email || !otp) {
       console.log('[Login For Other] Missing email or OTP:', { hasEmail: !!email, hasOtp: !!otp })
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Email and OTP are required',
         debug: { hasEmail: !!email, hasOtp: !!otp }
       })
@@ -1169,12 +1148,12 @@ router.post('/verify-otp', async (req, res) => {
       storedType: typeof otpData.otp,
       providedType: typeof otp,
     })
-    
+
     if (otpData.otp !== otp) {
       console.log('[Login For Other] OTP mismatch')
       return res.status(400).json({
         error: 'Invalid OTP code. Please try again.',
-        debug: { 
+        debug: {
           storedOtpLength: otpData.otp?.length,
           providedOtpLength: otp?.length,
         }
@@ -1187,25 +1166,13 @@ router.post('/verify-otp', async (req, res) => {
       return res.status(404).json({ error: 'User not found in database' })
     }
 
-    // Verify this is a SELF user (or null for backward compatibility)
-    if (selfUser.userType && selfUser.userType !== 'SELF') {
-      return res.status(400).json({ 
-        error: 'Invalid account type. Only "Login for Yourself" accounts can be viewed.',
-      })
-    }
-    
-    // Update userType to SELF if it's null (migration for existing users)
-    if (!selfUser.userType) {
-      try {
-        await prisma.user.update({
-          where: { id: selfUser.id },
-          data: { userType: 'SELF' },
-        })
-        selfUser.userType = 'SELF'
-      } catch (updateError) {
-        console.error('[Login For Other] Error updating userType:', updateError)
-        // Continue anyway - userType will be null but we'll allow access
-      }
+    // STRICT: Verify this is explicitly a SELF user
+    // Reject null userType and OTHER accounts
+    if (!selfUser.userType || selfUser.userType !== 'SELF') {
+      const errorMsg = !selfUser.userType
+        ? 'Account type not set. Only verified SELF accounts can be viewed.'
+        : 'Invalid account type. Only SELF accounts can be viewed.'
+      return res.status(400).json({ error: errorMsg })
     }
 
     if (!selfUser.clerkId) {
@@ -1313,34 +1280,18 @@ router.post('/complete-login', async (req, res) => {
     if (!selfUser) {
       return res.status(404).json({ error: 'Self user not found' })
     }
-    
-    // Verify this is a SELF user (or null for backward compatibility)
-    if (selfUser.userType && selfUser.userType !== 'SELF') {
-      return res.status(400).json({ 
-        error: 'Invalid account type. Only "Login for Yourself" accounts can be viewed.',
-      })
-    }
-    
-    // Update userType to SELF if it's null (migration for existing users)
-    if (!selfUser.userType) {
-      try {
-        await prisma.user.update({
-          where: { id: selfUser.id },
-          data: { userType: 'SELF' },
-        })
-        selfUser.userType = 'SELF'
-      } catch (updateError) {
-        console.error('[Login For Other] Error updating userType:', updateError)
-        // Continue anyway
-      }
+
+    // STRICT: Verify this is explicitly a SELF user
+    if (!selfUser.userType || selfUser.userType !== 'SELF') {
+      const errorMsg = !selfUser.userType
+        ? 'Account type not set. Only verified SELF accounts can be viewed.'
+        : 'Invalid account type. Only SELF accounts can be viewed.'
+      return res.status(400).json({ error: errorMsg })
     }
 
-    // Create or find the OTHER user (viewer)
-    // Try to get the viewer's Clerk ID from the request (if they're logged in)
-    // The viewer should be logged in with Clerk to access this endpoint
+    // Extract viewer's Clerk ID from authorization header
     let viewerClerkId = null
     try {
-      // Try to get Clerk ID from authorization header
       const authHeader = req.headers.authorization
       console.log('[Login For Other] Authorization header present:', !!authHeader)
       if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -1365,7 +1316,7 @@ router.post('/complete-login', async (req, res) => {
       console.error('[Login For Other] Error details:', error.message, error.stack)
     }
 
-    // Find or create the viewer (OTHER) user without violating clerk_id uniqueness
+    // STRICT ENFORCEMENT: Check if viewer Clerk ID already has ANY account
     let otherUser = null
     console.log('[Login For Other] Resolving viewer account:', {
       viewerClerkId,
@@ -1373,24 +1324,37 @@ router.post('/complete-login', async (req, res) => {
     })
 
     if (viewerClerkId) {
-      const existingByClerk = await prisma.user.findUnique({
+      const existingUser = await prisma.user.findUnique({
         where: { clerkId: viewerClerkId },
+        include: {
+          viewedUser: true,
+        }
       })
 
-      if (existingByClerk) {
-        // Convert existing record (SELF or OTHER) into an OTHER viewer for this selfUser
-        if (existingByClerk.userType !== 'OTHER' || existingByClerk.viewedUserId !== selfUser.id) {
-          console.log('[Login For Other] Updating existing user with same Clerk ID to OTHER viewer')
-          otherUser = await prisma.user.update({
-            where: { id: existingByClerk.id },
-            data: {
-              userType: 'OTHER',
-              viewedUserId: selfUser.id,
-              name: existingByClerk.name || `Viewer for ${selfUser.email}`,
-            },
+      if (existingUser) {
+        // RULE: One Clerk ID can only have ONE account type
+        if (existingUser.userType === 'SELF') {
+          return res.status(409).json({
+            error: 'You already have a SELF account. Cannot create OTHER account.',
+            message: 'One account can only be SELF or OTHER, not both. Please log out and choose which type you want.',
           })
-        } else {
-          otherUser = existingByClerk
+        }
+
+        // RULE: One OTHER account can only view ONE SELF account
+        if (existingUser.userType === 'OTHER' && existingUser.viewedUserId !== selfUser.id) {
+          return res.status(409).json({
+            error: 'You are already viewing another account.',
+            message: `You are currently viewing ${existingUser.viewedUser?.email}. One account can only view one person.`,
+            currentlyViewing: {
+              email: existingUser.viewedUser?.email,
+              name: existingUser.viewedUser?.name,
+            }
+          })
+        }
+
+        // User already viewing this exact SELF account - return existing record
+        if (existingUser.userType === 'OTHER' && existingUser.viewedUserId === selfUser.id) {
+          otherUser = existingUser
         }
       }
     }
@@ -1433,7 +1397,7 @@ router.post('/complete-login', async (req, res) => {
         },
       })
     }
-    
+
     console.log('[Login For Other] Final OTHER user:', {
       id: otherUser.id,
       email: otherUser.email,

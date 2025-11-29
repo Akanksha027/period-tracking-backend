@@ -9,6 +9,7 @@ import symptomsRoutes from './routes/symptoms.js'
 import moodsRoutes from './routes/moods.js'
 import chatRoutes from './routes/chat.js'
 import reminderRoutes from './routes/reminders.js'
+import predictionsRoutes from './routes/predictions.js'
 import notificationRoutes from './routes/notifications.js'
 
 // Verify chat route is loaded
@@ -93,6 +94,7 @@ app.use('/api/moods', moodsRoutes)
 app.use('/api/chat', chatRoutes)
 app.use('/api/reminders', reminderRoutes)
 app.use('/api/notifications', notificationRoutes)
+app.use('/api/predictions', predictionsRoutes)
 
 // Log that chat route is registered
 console.log('[Server] Chat route registered at /api/chat')
